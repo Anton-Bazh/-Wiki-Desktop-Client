@@ -22,7 +22,7 @@ theme:
   features:
     - navigation.instant
     - navigation.tracking
-    - navigation.tabs
+    - navigation.sections
     - navigation.top
     - navigation.indexes
     - search.suggest
@@ -49,6 +49,7 @@ hooks:
 
 plugins:
   - search
+  - callouts
   - ezlinks:
       wikilinks: true
       warn_ambiguities: true
