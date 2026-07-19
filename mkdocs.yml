@@ -56,6 +56,6 @@ plugins:
       callouts: true
 
 docs_dir: synced_docs
-
-nav:
-  - Inicio: index.md
+# Sin `nav:` fijo a proposito: cada equipo conecta un repo con su propia
+# estructura de carpetas, MkDocs genera la navegacion automaticamente a
+# partir de lo que exista en docs_dir.

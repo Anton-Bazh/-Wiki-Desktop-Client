@@ -1,6 +1,9 @@
-.venv/
-site/
-__pycache__/
-*.pyc
 .DS_Store
+*.pyc
+__pycache__/
+site/
 synced_docs/
+.venv/
+webapp/config.json
+webapp/mkdocs.pid
+webapp/__pycache__/
