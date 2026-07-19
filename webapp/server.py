@@ -24,6 +24,7 @@ import socket
 import subprocess
 import sys
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import keyring
@@ -40,7 +41,33 @@ MKDOCS_HOST, MKDOCS_PORT = "127.0.0.1", 8765
 KEYRING_SERVICE = "wiki-desktop-client"
 KEYRING_KEY = "github-pat"
 
-app = FastAPI(title="Wiki Desktop Client — Conexión")
+# Resultado del sync automatico de arranque (None si no habia repo
+# configurado todavia). Se muestra una vez en la pantalla de conectado
+# para que el usuario sepa que se refresco solo, sin tener que adivinar.
+startup_sync: tuple[bool, str] | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Al iniciar el proceso (lo mas parecido a "abrir la app" en este
+    prototipo web), si ya hay un repo configurado de una sesion anterior,
+    se hace el pull automatico -- tal como lo pide la spec original,
+    en vez de depender de que el usuario le de clic a Resincronizar."""
+    global startup_sync
+    config = read_config()
+    if config is not None:
+        token = keyring.get_password(KEYRING_SERVICE, KEYRING_KEY)
+        ok, message = run_sync(config["repo_url"], token)
+        startup_sync = (ok, message)
+        # Se levanta la wiki aunque el pull automatico falle (ej. sin
+        # internet): sirve el contenido de la ultima sincronizacion buena
+        # que haya en disco, en vez de dejar al usuario sin nada.
+        if (SYNCED_DOCS / ".git").exists():
+            ensure_mkdocs_running()
+    yield
+
+
+app = FastAPI(title="Wiki Desktop Client — Conexión", lifespan=lifespan)
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 
 
@@ -177,12 +204,23 @@ def restart_mkdocs() -> None:
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
+    global startup_sync
     config = read_config()
     if config is None:
         return templates.TemplateResponse(
             request, "connect.html", {"error": None, "repo_url": ""}
         )
     has_token = keyring.get_password(KEYRING_SERVICE, KEYRING_KEY) is not None
+
+    # El aviso del sync automatico de arranque se muestra una sola vez
+    # (la primera carga de pantalla tras encender el proceso), no en
+    # cada visita a "/".
+    sync_message = sync_ok = None
+    if startup_sync is not None:
+        sync_ok, base_message = startup_sync
+        sync_message = ("Sincronizado al arrancar. " if sync_ok else "No se pudo sincronizar al arrancar (se muestra la última copia local). ") + base_message
+        startup_sync = None
+
     return templates.TemplateResponse(
         request,
         "connected.html",
@@ -190,6 +228,8 @@ def index(request: Request):
             "repo_url": config["repo_url"],
             "has_token": has_token,
             "wiki_url": f"http://{MKDOCS_HOST}:{MKDOCS_PORT}/",
+            "sync_message": sync_message,
+            "sync_ok": sync_ok,
         },
     )
 
