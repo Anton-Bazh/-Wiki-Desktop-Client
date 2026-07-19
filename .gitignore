@@ -9,6 +9,9 @@ repos/
 # Python autocontenido (python-build-standalone) por plataforma -- se
 # descarga e instala con runtime/requirements.lock.txt, no se versiona.
 runtime/*/
+# Instaladores compilados -- se generan con installer/windows/marc.nsi,
+# no se versionan.
+dist/
 webapp/config.json
 webapp/mkdocs.pid
 webapp/page_index.json

@@ -1,0 +1,41 @@
+MARC (Markdown Automatizado por Repo y Consulta)
+Terminos y condiciones de uso
+
+Ultima actualizacion: 2026.
+
+1. Que es MARC
+   MARC es una aplicacion de escritorio para leer documentacion tecnica
+   en equipo directamente desde uno o varios repositorios de Git,
+   traducida a una wiki navegable. MARC nunca modifica el contenido de
+   los repositorios que conectas: solo lo lee.
+
+2. Tus datos
+   - Los tokens de acceso (Personal Access Token de GitHub) que
+     conectes se guardan cifrados en el llavero nativo de tu sistema
+     operativo. Nunca se guardan en texto plano ni se envian a ningun
+     servidor de terceros.
+   - MARC no recolecta datos de uso, telemetria ni analitica de
+     ningun tipo.
+   - MARC funciona sin conexion a internet una vez que tu contenido
+     ya fue sincronizado; solo necesita red para traer cambios nuevos
+     de los repositorios que conectaste.
+
+3. Uso del software
+   MARC se entrega "tal cual", sin garantia de ningun tipo, expresa o
+   implicita. El autor no se hace responsable por perdida de datos,
+   interrupciones de servicio, o cualquier dano derivado del uso de
+   esta aplicacion.
+
+4. Instalacion
+   Al continuar con la instalacion, aceptas estos terminos. Puedes
+   desinstalar MARC en cualquier momento desde el Panel de Control /
+   Configuracion de Windows, u opcionalmente eliminar la carpeta de
+   instalacion manualmente.
+
+5. Creditos
+   MARC esta construido sobre MkDocs (motor de traduccion de
+   Markdown) y Material for MkDocs. Ver "Acerca de" dentro de la
+   aplicacion para mas detalles.
+
+Creado por Antonio Baeza.
+github.com/Anton-Bazh
