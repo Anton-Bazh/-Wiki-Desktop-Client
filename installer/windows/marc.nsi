@@ -54,7 +54,7 @@ Section "MARC (nucleo)" SEC_CORE
   SectionIn RO
 
   SetOutPath "$INSTDIR\python"
-  File /r "..\..\runtime\windows-x86_64\python\*.*"
+  File /r /x "__pycache__" "..\..\runtime\windows-x86_64\python\*.*"
 
   SetOutPath "$INSTDIR\webapp"
   File /r /x "__pycache__" /x "config.json" /x "mkdocs.pid" /x "page_index.json" "..\..\webapp\*.*"
