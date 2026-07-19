@@ -55,5 +55,7 @@ plugins:
   - embed_file:
       callouts: true
 
+docs_dir: synced_docs
+
 nav:
   - Inicio: index.md
