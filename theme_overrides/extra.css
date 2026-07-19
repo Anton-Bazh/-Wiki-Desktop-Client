@@ -1,0 +1,17 @@
+/* <html> no tenia background propio (solo <body>) -- durante la
+   navegacion instantanea de Material, el reemplazo del <body> deja ver
+   un instante el fondo transparente antes de que el nuevo body aplique
+   el suyo, lo que se percibe como un parpadeo. Fijar el mismo color
+   aqui lo elimina.
+
+   --md-default-bg-color no sirve para esto: Material no la redefine con
+   una regla CSS estatica para el esquema oscuro (confirmado revisando
+   el CSS compilado -- solo existe para "default"/claro), asi que
+   heredarla en <html> siempre resolvia al valor claro. Se usan los
+   colores reales medidos en el navegador para cada esquema en su lugar. */
+html {
+  background: #fff;
+}
+html:has(body[data-md-color-scheme="slate"]) {
+  background: #1e2129;
+}

@@ -45,6 +45,12 @@ theme:
 extra_javascript:
   - vendor/mermaid.min.js
 
+# extra.css vive en theme_overrides/ (el custom_dir) -- MkDocs copia sus
+# archivos junto con los del tema base automaticamente, sin necesitar un
+# hook propio como el de branding/vendor (que viven fuera de custom_dir).
+extra_css:
+  - extra.css
+
 markdown_extensions:
   - admonition
   - pymdownx.details
