@@ -2,8 +2,10 @@
 *.pyc
 __pycache__/
 site/
-synced_docs/
+synced_docs
+repos/
 .venv/
 webapp/config.json
 webapp/mkdocs.pid
+webapp/page_index.json
 webapp/__pycache__/

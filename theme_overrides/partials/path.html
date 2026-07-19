@@ -1,0 +1,28 @@
+{#-
+  Override de partials/path.html (mkdocs-material). El original arma la
+  ruta a partir de las secciones del nav (page.ancestors), que en un
+  repo con paginas sueltas en la raiz suele quedar vacio. Esta version
+  siempre muestra "<repo> / wiki / <segmentos de la URL>", reusando las
+  mismas clases md-path__* del tema para heredar su estilo (separadores,
+  ellipsis, responsive) sin CSS propio.
+-#}
+{% set segments = page.url.strip('/').split('/') if page.url else [] %}
+<nav class="md-path" aria-label="Ruta">
+  <ol class="md-path__list">
+    <li class="md-path__item">
+      <a href="/" class="md-path__link">{{ config.extra.active_repo_name }}</a>
+    </li>
+    <li class="md-path__item">
+      <a href="/wiki" class="md-path__link">wiki</a>
+    </li>
+    {% for seg in segments %}
+      <li class="md-path__item">
+        {% if not loop.last %}
+          <a href="/wiki/{{ segments[:loop.index] | join('/') }}/" class="md-path__link">{{ seg }}</a>
+        {% else %}
+          <span class="md-path__link">{{ seg }}</span>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ol>
+</nav>

@@ -1,0 +1,196 @@
+{% extends "shell.html" %}
+{% import "icons.html" as icons %}
+
+{% block title %}Repositorios - Wiki Desktop Client{% endblock %}
+{% block menu_icon %}{{ icons.menu() }}{% endblock %}
+
+{% block sidebar %}
+  <div class="sidebar-section">
+    <span class="sidebar-eyebrow">Tus repositorios</span>
+    {% for repo in repos %}
+      {% if repo.id == active_id %}
+        <div class="sidebar-repo active">
+          <span class="dot dot-active"></span>
+          <span class="sidebar-repo-name">{{ repo.owner }}/{{ repo.name }}</span>
+          <span class="sidebar-repo-tag">activo</span>
+        </div>
+      {% else %}
+        <form method="post" action="/select/{{ repo.id }}" class="sidebar-repo-form">
+          <button type="submit" class="sidebar-repo">
+            <span class="dot"></span>
+            <span class="sidebar-repo-name">{{ repo.owner }}/{{ repo.name }}</span>
+          </button>
+        </form>
+      {% endif %}
+    {% endfor %}
+    {% if not repos %}
+      <p class="sidebar-empty">Sin repositorios todavía.</p>
+    {% endif %}
+  </div>
+
+  <div class="sidebar-section">
+    <span class="sidebar-eyebrow">Accesos</span>
+    <a class="sidebar-link" href="/_docs">{{ icons.book() }} Documentación de uso</a>
+    <a class="sidebar-link" href="#" onclick="event.preventDefault(); openAboutModal();">{{ icons.info() }} Acerca de</a>
+  </div>
+{% endblock %}
+
+{% block content %}
+  <div class="page-head">
+    <h1>Repositorios</h1>
+    <p class="page-subtitle">
+      Conecta, selecciona o quita repositorios.
+      <a class="link-back" href="/">{{ icons.back() }} Volver al hub</a>
+    </p>
+  </div>
+
+  {% if sync_message %}
+    <div class="banner {{ 'ok' if sync_ok else 'error' }}">{{ sync_message }}</div>
+  {% endif %}
+
+  {% if repos %}
+    <section class="panel">
+      <h2 class="panel-title">Tus repositorios</h2>
+      {% for repo in repos %}
+        <div class="repo-row {{ 'active' if repo.id == active_id else '' }}">
+          {{ icons.github() }}
+          <span class="repo-row-url">{{ repo.repo_url }}</span>
+          {% if repo.id == active_id %}
+            <span class="status-pill status-active">{{ icons.check() }} activo</span>
+          {% else %}
+            <span class="status-pill status-inactive">desactivado</span>
+          {% endif %}
+          <form method="post" action="/disconnect/{{ repo.id }}">
+            <button type="submit" class="row-action danger">{{ icons.trash() }} Quitar</button>
+          </form>
+        </div>
+        {% if repo.id == active_id %}
+          <a class="button-block" href="/wiki">Ir a la wiki {{ icons.arrow_right() }}</a>
+          <form method="post" action="/resync">
+            <button type="submit" class="button-block secondary">{{ icons.refresh() }} Resincronizar repositorio activo</button>
+          </form>
+        {% endif %}
+      {% endfor %}
+    </section>
+  {% endif %}
+
+  <section class="panel">
+    <h2 class="panel-title">{{ 'Conectar otro repositorio' if repos else 'Conectar repositorio' }}</h2>
+
+    {% if error %}
+      <div class="banner error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/connect" class="connect-form">
+      <label for="repo_url">URL del repositorio (GitHub)</label>
+      <div class="input-icon">
+        {{ icons.github() }}
+        <input type="text" id="repo_url" name="repo_url" placeholder="https://github.com/tu-equipo/wiki.git" value="{{ repo_url }}" required>
+      </div>
+
+      <label for="token">Personal Access Token <span class="badge">opcional — solo repos privados</span></label>
+      <input type="password" id="token" name="token" placeholder="ghp_...">
+      <p class="hint">El token se guarda cifrado en el llavero del sistema operativo, nunca en texto plano.</p>
+
+      <button type="submit" class="button-block">Conectar</button>
+    </form>
+  </section>
+{% endblock %}
+
+{% block extra_style %}
+<style>
+  .content { max-width: 640px; }
+  .page-head { margin-bottom: 1.2rem; }
+  .page-subtitle { margin: 0.2rem 0 0; font-size: 0.85rem; color: var(--text-muted); }
+  .link-back { display: inline-flex; align-items: center; gap: 0.3rem; margin-left: 0.4rem; color: var(--accent); text-decoration: none; font-weight: 600; }
+  .panel { margin-bottom: 1.6rem; }
+  .panel-title { font-size: 0.95rem; margin: 0 0 0.75rem; }
+  .banner { padding: 0.7rem 0.9rem; border-radius: 8px; font-size: 0.85rem; margin-bottom: 1rem; }
+  .banner.error { background: var(--error-bg); color: var(--error-text); white-space: pre-wrap; }
+  .banner.ok { background: var(--ok-bg); color: var(--ok-text); }
+
+  .repo-row {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.75rem 0.9rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 0.5rem;
+  }
+  .repo-row.active { border-color: var(--accent); }
+  .repo-row .icon { color: var(--text-muted); flex-shrink: 0; }
+  .repo-row-url { flex: 1; font-family: ui-monospace, monospace; font-size: 0.8rem; overflow-wrap: anywhere; }
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.72rem;
+    font-weight: 650;
+    padding: 0.22rem 0.55rem;
+    border-radius: 999px;
+    flex-shrink: 0;
+  }
+  .status-pill .icon { width: 0.85rem; height: 0.85rem; }
+  .status-active { background: var(--ok-bg); color: var(--ok-text); }
+  .status-inactive { background: var(--border); color: var(--text-muted); }
+  .row-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.4rem 0.7rem;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .row-action:hover { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
+  .repo-row + form,
+  .repo-row + a.button-block {
+    margin-bottom: 0.5rem;
+  }
+
+  .button-block {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.65rem 1rem;
+    background: var(--accent);
+    color: var(--accent-ink);
+    border: none;
+    border-radius: 9px;
+    font-size: 0.88rem;
+    font-weight: 650;
+    text-decoration: none;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .button-block.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+
+  .connect-form label { display: block; font-size: 0.8rem; color: var(--text-muted); margin: 0.9rem 0 0.35rem; }
+  .connect-form label:first-child { margin-top: 0; }
+  .connect-form .badge { font-size: 0.68rem; font-weight: 650; background: var(--border); color: var(--text-muted); padding: 0.12rem 0.45rem; border-radius: 999px; margin-left: 0.3rem; }
+  .connect-form input[type=text], .connect-form input[type=password] {
+    width: 100%;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.88rem;
+  }
+  .connect-form input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+  .input-icon { position: relative; display: flex; align-items: center; }
+  .input-icon .icon { position: absolute; left: 0.75rem; color: var(--text-muted); }
+  .input-icon input { padding-left: 2.1rem !important; }
+  .hint { font-size: 0.75rem; color: var(--text-muted); margin: 0.35rem 0 0; }
+  .connect-form .button-block { margin-top: 1.1rem; }
+</style>
+{% endblock %}

@@ -1,0 +1,224 @@
+{#-
+  Override de partials/header.html (mkdocs-material) para que la wiki
+  tenga una sola barra en vez de dos: el logo lleva al hub de la app
+  (no al "inicio" del repo activo), y se agregan botones de volver /
+  repositorios / acerca de junto al resto de los controles nativos del
+  tema (drawer, paleta, buscador). Basado en la plantilla original del
+  paquete instalado -- ver esa version para comparar si mkdocs-material
+  cambia su estructura en una actualizacion.
+-#}
+{% set class = "md-header" %}
+{% if "navigation.tabs.sticky" in features %}
+  {% set class = class ~ " md-header--shadow md-header--lifted" %}
+{% elif "navigation.tabs" not in features %}
+  {% set class = class ~ " md-header--shadow" %}
+{% endif %}
+<header class="{{ class }}" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="{{ lang.t('header') }}">
+    <a href="#" onclick="event.preventDefault(); history.back();" title="Atrás" aria-label="Atrás" class="md-header__button md-icon">
+      <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+    </a>
+    <a href="/" title="Hub — Wiki Desktop Client" class="md-header__button md-logo" aria-label="Hub — Wiki Desktop Client" data-md-component="logo">
+      {% include "partials/logo.html" %}
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      {% set icon = config.theme.icon.menu or "material/menu" %}
+      {% include ".icons/" ~ icon ~ ".svg" %}
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            {{ config.site_name }}
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            {% if page.meta and page.meta.title %}
+              {{ page.meta.title }}
+            {% else %}
+              {{ page.title }}
+            {% endif %}
+          </span>
+        </div>
+      </div>
+    </div>
+    <a href="/_admin" title="Repositorios" aria-label="Repositorios" class="md-header__button md-icon">
+      <svg viewBox="0 0 24 24" width="24" height="24">
+        <circle cx="6" cy="6" r="2.3" style="fill:currentColor"/>
+        <circle cx="6" cy="18" r="2.3" style="fill:currentColor"/>
+        <circle cx="18" cy="12" r="2.3" style="fill:currentColor"/>
+        <path d="M6 8.3v7.4M7.7 7C11 8 13.8 9.6 16.1 10.6" style="fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round"/>
+      </svg>
+    </a>
+    <a href="#" onclick="event.preventDefault(); openAboutModal();" title="Acerca de" aria-label="Acerca de" class="md-header__button md-icon">
+      <svg viewBox="0 0 24 24" width="24" height="24">
+        <circle cx="12" cy="12" r="8.6" style="fill:none;stroke:currentColor;stroke-width:1.8"/>
+        <path d="M12 11v5.2" style="fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round"/>
+        <circle cx="12" cy="7.8" r="1" style="fill:currentColor"/>
+      </svg>
+    </a>
+    {% if config.theme.palette %}
+      {% if not config.theme.palette is mapping %}
+        {% include "partials/palette.html" %}
+      {% endif %}
+    {% endif %}
+    {% if not config.theme.palette is mapping %}
+      {% include "partials/javascripts/palette.html" %}
+    {% endif %}
+    {% if config.extra.alternate %}
+      {% include "partials/alternate.html" %}
+    {% endif %}
+    {% if "material/search" in config.plugins %}
+      {% set search = config.plugins["material/search"] | attr("config") %}
+      {% if search.enabled %}
+        <label class="md-header__button md-icon" for="__search">
+          {% set icon = config.theme.icon.search or "material/magnify" %}
+          {% include ".icons/" ~ icon ~ ".svg" %}
+        </label>
+        {% include "partials/search.html" %}
+      {% endif %}
+    {% endif %}
+    {% if config.repo_url %}
+      <div class="md-header__source">
+        {% include "partials/source.html" %}
+      </div>
+    {% endif %}
+  </nav>
+  {% if "navigation.tabs.sticky" in features %}
+    {% if "navigation.tabs" in features %}
+      {% include "partials/tabs.html" %}
+    {% endif %}
+  {% endif %}
+</header>
+
+{#-
+  Modal "Acerca de" (duplicado de webapp/templates/about_modal.html --
+  motor de plantillas distinto al de FastAPI, no hay forma de
+  compartir el include entre los dos). Mismas funciones globales
+  openAboutModal()/closeAboutModal() que en el shell de la app, para
+  que el boton de arriba y el del hub se comporten igual.
+-#}
+<div class="about-overlay" id="about-overlay" onclick="if (event.target === this) closeAboutModal();">
+  <div class="about-modal" role="dialog" aria-modal="true" aria-label="Acerca de Wiki Desktop Client">
+    <button type="button" class="about-close" aria-label="Cerrar" onclick="closeAboutModal();">
+      <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 5l10 10M15 5 5 15"/></svg>
+    </button>
+
+    <img class="about-mark" src="/branding/logo-ring.png" alt="">
+    <h2 class="about-title">Wiki Desktop Client</h2>
+    <span class="about-version">v{{ config.extra.app_version }}</span>
+
+    <p class="about-pitch">
+      Tu documentación técnica, siempre a la mano: conectada directo a tu
+      repositorio de Git, sin depender de la nube.
+    </p>
+
+    <div class="about-creator">
+      <span class="about-creator-label">Creado por</span>
+      <span class="about-creator-name">Antonio Baeza</span>
+      <div class="about-creator-links">
+        <a href="https://github.com/Anton-Bazh" target="_blank" rel="noopener">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+          github.com/Anton-Bazh
+        </a>
+        <a href="mailto:baezaantoniocontacto@gmail.com">
+          <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4.5" width="15" height="11" rx="1.8"/><path d="M3 5.5l7 5.5 7-5.5"/></svg>
+          baezaantoniocontacto@gmail.com
+        </a>
+      </div>
+    </div>
+
+    <p class="about-credit">Basado en MkDocs + Material.</p>
+  </div>
+</div>
+
+<style>
+  :root {
+    --wdc-text: #191b22; --wdc-muted: #6b7180; --wdc-accent: #5b56f0; --wdc-accent-soft: #edecfe;
+    --wdc-glass-bg: rgba(255, 255, 255, 0.55); --wdc-glass-border: rgba(255, 255, 255, 0.6);
+  }
+  [data-md-color-scheme="slate"] {
+    --wdc-text: #e7e8ee; --wdc-muted: #8a8d9c; --wdc-accent: #8b86ff; --wdc-accent-soft: #232244;
+    --wdc-glass-bg: rgba(26, 28, 35, 0.55); --wdc-glass-border: rgba(255, 255, 255, 0.1);
+  }
+  .about-overlay {
+    position: fixed; inset: 0; z-index: 1000;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(10, 10, 14, 0.35);
+    opacity: 0; pointer-events: none; transition: opacity 0.16s ease;
+  }
+  .about-overlay.open { opacity: 1; pointer-events: auto; }
+  .about-modal {
+    position: relative;
+    width: min(400px, 90vw);
+    padding: 2.1rem 1.9rem 1.7rem;
+    border-radius: 22px;
+    text-align: center;
+    color: var(--wdc-text);
+    background: var(--wdc-glass-bg);
+    border: 1px solid var(--wdc-glass-border);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.32);
+    backdrop-filter: blur(28px) saturate(180%);
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    transform: scale(0.96) translateY(6px);
+    transition: transform 0.16s ease;
+    font-family: -apple-system, "Segoe UI", Roboto, Inter, sans-serif;
+  }
+  .about-overlay.open .about-modal { transform: scale(1) translateY(0); }
+  .about-close {
+    position: absolute; top: 0.9rem; right: 0.9rem;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 1.9rem; height: 1.9rem; border: none; border-radius: 7px;
+    background: transparent; color: var(--wdc-muted); cursor: pointer;
+  }
+  .about-close:hover { background: rgba(128, 128, 128, 0.18); color: var(--wdc-text); }
+  .about-mark {
+    width: 4.4rem; height: 4.4rem; object-fit: contain; margin-bottom: 0.7rem;
+    filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.18));
+  }
+  .about-title { font-size: 1.15rem; font-weight: 700; margin: 0; letter-spacing: -0.01em; color: var(--wdc-text); }
+  .about-version {
+    display: inline-block; margin-top: 0.4rem; font-size: 0.7rem; font-weight: 650;
+    font-family: ui-monospace, monospace; color: var(--wdc-muted);
+    background: rgba(128, 128, 128, 0.14); padding: 0.15rem 0.55rem; border-radius: 999px;
+  }
+  .about-pitch { font-size: 0.88rem; line-height: 1.5; color: var(--wdc-muted); margin: 1rem 0 1.4rem; }
+  .about-creator { padding: 1rem; border-radius: 14px; background: rgba(128, 128, 128, 0.08); margin-bottom: 1.2rem; }
+  .about-creator-label { display: block; font-size: 0.7rem; color: var(--wdc-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .about-creator-name { display: block; font-size: 1rem; font-weight: 650; margin: 0.15rem 0 0.6rem; color: var(--wdc-text); }
+  .about-creator-links { display: flex; flex-direction: column; gap: 0.45rem; align-items: center; }
+  .about-creator-links a { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: var(--wdc-text); text-decoration: none; }
+  .about-creator-links a:hover { color: var(--wdc-accent); }
+  .about-credit { font-size: 0.72rem; line-height: 1.5; color: var(--wdc-muted); margin: 0; }
+
+  /* Buscador nativo, restilado: la caja por defecto de mkdocs-material
+     es un rectangulo casi sin esquinas y muy poco contraste sobre el
+     header indigo. */
+  .md-search__form {
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.16);
+    transition: background 0.15s ease;
+  }
+  .md-search__form:hover { background: rgba(255, 255, 255, 0.24); }
+  [data-md-toggle="search"]:checked ~ .md-header .md-search__form {
+    border-radius: 10px 10px 0 0;
+    background: var(--md-default-bg-color);
+  }
+  .md-search__input + .md-search__icon { opacity: 0.85; }
+  .md-search__input::placeholder { opacity: 0.75; }
+</style>
+
+<script>
+  function openAboutModal() {
+    var el = document.getElementById('about-overlay');
+    if (el) el.classList.add('open');
+  }
+  function closeAboutModal() {
+    var el = document.getElementById('about-overlay');
+    if (el) el.classList.remove('open');
+  }
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeAboutModal();
+  });
+</script>

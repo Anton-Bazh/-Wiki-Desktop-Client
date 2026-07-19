@@ -1,0 +1,110 @@
+{% extends "shell.html" %}
+{% import "icons.html" as icons %}
+
+{% block menu_icon %}{{ icons.menu() }}{% endblock %}
+
+{% block search %}
+<label class="topbar-search">
+  {{ icons.search() }}
+  <input type="search" id="repo-search" placeholder="Buscar repositorios…" autocomplete="off">
+</label>
+{% endblock %}
+
+{% block sidebar %}
+  <a class="sidebar-connect" href="/_admin">{{ icons.plus() }} Conectar repositorio</a>
+
+  <div class="sidebar-section">
+    <span class="sidebar-eyebrow">Accesos</span>
+    <a class="sidebar-link" href="/_docs">{{ icons.book() }} Documentación de uso</a>
+    <a class="sidebar-link" href="#" onclick="event.preventDefault(); openAboutModal();">{{ icons.info() }} Acerca de</a>
+  </div>
+{% endblock %}
+
+{% macro card_body(repo) %}
+  <span class="repo-card-head">
+    {{ icons.github() }}
+    <span class="repo-card-title">{{ repo.name }}</span>
+  </span>
+  <span class="repo-card-owner">{{ repo.owner }}</span>
+  <span class="repo-card-meta">
+    {% if repo.id == active_id %}
+      <span class="repo-card-active"><span class="dot dot-active"></span> activo</span>
+    {% endif %}
+    <span class="repo-card-count">{{ repo.page_count }} página{{ 's' if repo.page_count != 1 else '' }}</span>
+    {% if repo.last_update %}<span class="repo-card-updated">Actualizado {{ repo.last_update }}</span>{% endif %}
+  </span>
+{% endmacro %}
+
+{% block content %}
+  {% if repos %}
+    <div class="card-grid" id="card-grid">
+      {% for repo in repos %}
+        {% if repo.id == active_id %}
+          <a class="repo-card {{ repo.badge }}" href="/wiki" data-search="{{ repo.search }}">{{ card_body(repo) }}</a>
+        {% else %}
+          <form method="post" action="/select/{{ repo.id }}">
+            <button type="submit" class="repo-card {{ repo.badge }}" data-search="{{ repo.search }}">{{ card_body(repo) }}</button>
+          </form>
+        {% endif %}
+      {% endfor %}
+    </div>
+    <p class="empty-search" id="empty-search" hidden>Sin repositorios para esa búsqueda.</p>
+  {% else %}
+    <div class="empty-state">
+      {{ icons.repo() }}
+      <p>Todavía no hay repositorios conectados.</p>
+      <a class="button-primary" href="/_admin">{{ icons.plus() }} Conectar repositorio</a>
+    </div>
+  {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (function () {
+    var input = document.getElementById('repo-search');
+    var grid = document.getElementById('card-grid');
+    var emptyMsg = document.getElementById('empty-search');
+    if (!input || !grid) return;
+    input.addEventListener('input', function () {
+      var q = input.value.trim().toLowerCase();
+      var visible = 0;
+      grid.querySelectorAll('.repo-card').forEach(function (card) {
+        var match = !q || card.dataset.search.indexOf(q) !== -1;
+        card.hidden = !match;
+        if (match) visible++;
+      });
+      if (emptyMsg) emptyMsg.hidden = visible !== 0;
+    });
+  })();
+</script>
+{% endblock %}
+
+{% block extra_style %}
+<style>
+  /* Marca de agua del logo: siempre detras del contenido (position
+     fixed + z-index 0), con los hijos de .content forzados a su propio
+     stacking context (z-index 1) para quedar encima -- un elemento
+     posicionado con z-index 0/auto pinta por defecto SOBRE contenido
+     normal sin posicionar, asi que sin esto el logo taparia las
+     tarjetas. */
+  .content { position: relative; }
+  .content > * { position: relative; z-index: 1; }
+  .content::before {
+    content: "";
+    position: fixed;
+    top: 0; left: 250px; right: 0; bottom: 0;
+    background: url('/branding/logo-ring.png') center / 42vh no-repeat;
+    opacity: 0.05;
+    pointer-events: none;
+    z-index: 0;
+  }
+  @media (prefers-color-scheme: dark) {
+    .content::before { background-image: url('/branding/logo-white.png'); opacity: 0.07; }
+  }
+  :root[data-theme="dark"] .content::before { background-image: url('/branding/logo-white.png'); opacity: 0.07; }
+  :root[data-theme="light"] .content::before { background-image: url('/branding/logo-ring.png'); opacity: 0.05; }
+  @media (max-width: 720px) {
+    .content::before { left: 0; }
+  }
+</style>
+{% endblock %}

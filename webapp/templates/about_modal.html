@@ -1,0 +1,127 @@
+{% import "icons.html" as icons %}
+<div class="about-overlay" id="about-overlay" onclick="if (event.target === this) closeAboutModal();">
+  <div class="about-modal" role="dialog" aria-modal="true" aria-label="Acerca de Wiki Desktop Client">
+    <button type="button" class="about-close" aria-label="Cerrar" onclick="closeAboutModal();">{{ icons.close() }}</button>
+
+    <img class="about-mark" src="/branding/logo-ring.png" alt="">
+    <h2 class="about-title">Wiki Desktop Client</h2>
+    <span class="about-version">v{{ app_version }}</span>
+
+    <p class="about-pitch">
+      Tu documentación técnica, siempre a la mano: conectada directo a tu
+      repositorio de Git, sin depender de la nube.
+    </p>
+
+    <div class="about-creator">
+      <span class="about-creator-label">Creado por</span>
+      <span class="about-creator-name">Antonio Baeza</span>
+      <div class="about-creator-links">
+        <a href="https://github.com/Anton-Bazh" target="_blank" rel="noopener">{{ icons.github() }} github.com/Anton-Bazh</a>
+        <a href="mailto:baezaantoniocontacto@gmail.com">{{ icons.mail() }} baezaantoniocontacto@gmail.com</a>
+      </div>
+    </div>
+
+    <p class="about-credit">Basado en MkDocs + Material.</p>
+  </div>
+</div>
+
+<style>
+  .about-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(10, 10, 14, 0.35);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.16s ease;
+  }
+  .about-overlay.open { opacity: 1; pointer-events: auto; }
+  .about-modal {
+    position: relative;
+    width: min(400px, 90vw);
+    padding: 2.1rem 1.9rem 1.7rem;
+    border-radius: 22px;
+    text-align: center;
+    color: var(--text);
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.32);
+    backdrop-filter: blur(28px) saturate(180%);
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    transform: scale(0.96) translateY(6px);
+    transition: transform 0.16s ease;
+  }
+  .about-overlay.open .about-modal { transform: scale(1) translateY(0); }
+  .about-close {
+    position: absolute;
+    top: 0.9rem;
+    right: 0.9rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.9rem;
+    height: 1.9rem;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .about-close:hover { background: rgba(128, 128, 128, 0.18); color: var(--text); }
+  .about-mark {
+    width: 4.4rem;
+    height: 4.4rem;
+    object-fit: contain;
+    margin-bottom: 0.7rem;
+    filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.18));
+  }
+  .about-title { font-size: 1.15rem; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+  .about-version {
+    display: inline-block;
+    margin-top: 0.4rem;
+    font-size: 0.7rem;
+    font-weight: 650;
+    font-family: ui-monospace, monospace;
+    color: var(--text-muted);
+    background: rgba(128, 128, 128, 0.14);
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+  }
+  .about-pitch { font-size: 0.88rem; line-height: 1.5; color: var(--text-muted); margin: 1rem 0 1.4rem; }
+  .about-creator {
+    padding: 1rem;
+    border-radius: 14px;
+    background: rgba(128, 128, 128, 0.08);
+    margin-bottom: 1.2rem;
+  }
+  .about-creator-label { display: block; font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .about-creator-name { display: block; font-size: 1rem; font-weight: 650; margin: 0.15rem 0 0.6rem; }
+  .about-creator-links { display: flex; flex-direction: column; gap: 0.45rem; align-items: center; }
+  .about-creator-links a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    color: var(--text);
+    text-decoration: none;
+  }
+  .about-creator-links a:hover { color: var(--accent); }
+  .about-credit { font-size: 0.72rem; line-height: 1.5; color: var(--text-muted); margin: 0; }
+</style>
+
+<script>
+  function openAboutModal() {
+    var el = document.getElementById('about-overlay');
+    if (el) el.classList.add('open');
+  }
+  function closeAboutModal() {
+    var el = document.getElementById('about-overlay');
+    if (el) el.classList.remove('open');
+  }
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeAboutModal();
+  });
+</script>
