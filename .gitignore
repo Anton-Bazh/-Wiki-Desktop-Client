@@ -5,6 +5,9 @@ site/
 synced_docs
 repos/
 .venv/
+# Python autocontenido (python-build-standalone) por plataforma -- se
+# descarga e instala con runtime/requirements.lock.txt, no se versiona.
+runtime/*/
 webapp/config.json
 webapp/mkdocs.pid
 webapp/page_index.json

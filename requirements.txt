@@ -7,6 +7,10 @@ mkdocs-material==9.7.7
 # interno (ver 08 Recuperacion de sesion... — puerto unico).
 httpx==0.28.1
 
+# Clone/pull de repositorios via libgit2, sin depender de que el usuario
+# tenga git instalado en el sistema (ver run_sync() en webapp/server.py).
+pygit2==1.19.3
+
 # Wikilinks y transclusion estilo Obsidian (ver 02 Motores de backend.md).
 mkdocs-obsidian-links==1.0.4
 mkdocs-embed-file-plugins==2.0.10

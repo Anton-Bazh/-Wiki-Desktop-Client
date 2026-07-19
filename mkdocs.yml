@@ -7,6 +7,11 @@ theme:
   custom_dir: theme_overrides
   logo: branding/logo-white.png
   favicon: branding/favicon.ico
+  # false desactiva el <link> a Google Fonts (confirmado en
+  # material/templates/base.html: "if config.theme.font != false") --
+  # sin esto la wiki no carga bien sin internet aunque el contenido ya
+  # este sincronizado. Cae a la pila de fuentes del sistema.
+  font: false
   palette:
     - media: "(prefers-color-scheme)"
       toggle:
@@ -33,6 +38,13 @@ theme:
     - search.highlight
     - content.code.copy
 
+# mermaid.min.js vendorizado en vendor/ (copiado al build por
+# hooks/copy_vendor.py): mkdocs-material solo baja Mermaid de unpkg.com
+# si "window.mermaid" todavia no existe (confirmado en su bundle.js), asi
+# que declararlo aqui hace que use esta copia local y nunca llame al CDN.
+extra_javascript:
+  - vendor/mermaid.min.js
+
 markdown_extensions:
   - admonition
   - pymdownx.details
@@ -54,6 +66,7 @@ hooks:
   - hooks/generate_home_redirect.py
   - hooks/expose_active_repo.py
   - hooks/copy_branding.py
+  - hooks/copy_vendor.py
 
 plugins:
   - search
