@@ -21,8 +21,6 @@ import unicodedata
 
 log = logging.getLogger("mkdocs.plugins.slugify_urls")
 
-_seen_dest_uris: set[str] = set()
-
 
 def _slugify_segment(segment: str) -> str:
     stem, dot, ext = segment.rpartition(".")
@@ -36,7 +34,7 @@ def _slugify_segment(segment: str) -> str:
 
 
 def on_files(files, config):
-    _seen_dest_uris.clear()
+    seen_dest_uris: set[str] = set()
     for file in files.documentation_pages():
         # Acceder a dest_uri dispara el calculo original de MkDocs
         # (maneja index.html, directory urls, etc.); solo normalizamos
@@ -45,11 +43,11 @@ def on_files(files, config):
         slug_segments = [_slugify_segment(s) for s in original.split("/")]
         candidate = "/".join(slug_segments)
 
-        if candidate in _seen_dest_uris:
+        if candidate in seen_dest_uris:
             last = slug_segments[-1]
             stem, dot, ext = last.rpartition(".")
             suffix = 2
-            while candidate in _seen_dest_uris:
+            while candidate in seen_dest_uris:
                 new_last = f"{stem}-{suffix}.{ext}" if dot else f"{last}-{suffix}"
                 candidate = "/".join(slug_segments[:-1] + [new_last])
                 suffix += 1
@@ -58,6 +56,6 @@ def on_files(files, config):
                 f"se uso '{candidate}' en su lugar."
             )
 
-        _seen_dest_uris.add(candidate)
+        seen_dest_uris.add(candidate)
         file.dest_uri = candidate
     return files

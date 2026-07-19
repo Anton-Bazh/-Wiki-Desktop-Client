@@ -45,17 +45,19 @@ import tempfile
 import time
 import unicodedata
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
 import keyring
+import pygit2
 from fastapi import FastAPI, Form, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from mkdocs.commands.build import build as mkdocs_build_site
 from mkdocs.config import load_config as mkdocs_load_config
+from mkdocs.structure.files import get_files
+from mkdocs.structure.nav import get_navigation
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REPOS_DIR = PROJECT_ROOT / "repos"
@@ -75,7 +77,7 @@ APP_VERSION = (PROJECT_ROOT / "VERSION").read_text().strip()
 # un equipo) -- distinto de los repos que el usuario conecta. Vacio
 # hasta que el repo exista; el boton del hub cae a /_admin mientras
 # tanto. Cuando exista, poner aqui su URL publica de GitHub.
-DOCS_REPO_URL: str | None = None
+DOCS_REPO_URL: str | None = "https://github.com/Anton-Bazh/Wiki-Desktop-Client-doc.git"
 
 # Resultado del sync automatico de arranque (None si no habia repo
 # activo configurado todavia). Se muestra una vez en /_admin para que
@@ -91,6 +93,12 @@ startup_sync: tuple[bool, str] | None = None
 PAGE_INDEX: dict[str, list[dict]] = {}
 if PAGE_INDEX_PATH.exists():
     PAGE_INDEX = json.loads(PAGE_INDEX_PATH.read_text())
+
+# Cache en memoria de la fecha del ultimo commit por repo, poblado junto
+# con PAGE_INDEX (ver refresh_page_index). Sin esto, hub() invocaba un
+# `git log` por repo en cada vista del Hub -- ahora solo se recalcula
+# cuando el repo realmente se sincroniza.
+LAST_UPDATE: dict[str, str | None] = {}
 
 
 @asynccontextmanager
@@ -193,6 +201,12 @@ def get_repo(config: dict, repo_id: str) -> dict | None:
 def get_active_repo(config: dict) -> dict | None:
     if config["active_id"] is None:
         return None
+    # El repo de documentacion de uso (DOCS_REPO_URL) nunca vive en
+    # config["repos"] a proposito -- ver docs(). Si esta activo, se
+    # sintetiza aqui su entrada para que el proxy de /wiki siga
+    # funcionando igual que con un repo normal.
+    if DOCS_REPO_URL and config["active_id"] == repo_id_for(DOCS_REPO_URL):
+        return {"id": config["active_id"], "repo_url": DOCS_REPO_URL}
     return get_repo(config, config["active_id"])
 
 
@@ -222,22 +236,30 @@ def repo_owner(repo_url: str) -> str:
 
 def repo_last_update(repo_id: str) -> str | None:
     """Fecha del ultimo commit en el clon local (ISO 8601), o None si no
-    hay clon todavia. Se lee del propio `git log`, no de la API de
-    GitHub: ya tenemos el repo clonado, así que no hace falta una
-    llamada de red aparte (que ademas fallaria sin token en repos
-    privados, o por rate limit si no hay token)."""
+    hay clon todavia. Se lee del propio repo con pygit2 (sin invocar el
+    `git` del sistema), no de la API de GitHub: ya tenemos el repo
+    clonado, así que no hace falta una llamada de red aparte (que ademas
+    fallaria sin token en repos privados, o por rate limit si no hay
+    token)."""
     dest = REPOS_DIR / repo_id
     if not (dest / ".git").exists():
         return None
-    result = subprocess.run(
-        ["git", "log", "-1", "--format=%cI"],
-        cwd=dest,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    output = result.stdout.strip()
-    return output if result.returncode == 0 and output else None
+    try:
+        repo = pygit2.Repository(str(dest))
+        commit = repo[repo.head.target]
+    except (pygit2.GitError, KeyError):
+        return None
+    tz = timezone(timedelta(minutes=commit.commit_time_offset))
+    return datetime.fromtimestamp(commit.commit_time, tz=tz).isoformat()
+
+
+def cached_last_update(repo_id: str) -> str | None:
+    """Como repo_last_update(), pero cacheado en LAST_UPDATE -- evita
+    lanzar `git log` de nuevo en cada vista del Hub para repos que ya
+    fueron consultados desde el ultimo sync."""
+    if repo_id not in LAST_UPDATE:
+        LAST_UPDATE[repo_id] = repo_last_update(repo_id)
+    return LAST_UPDATE[repo_id]
 
 
 def relative_date(iso: str | None) -> str | None:
@@ -263,13 +285,19 @@ def relative_date(iso: str | None) -> str | None:
 
 
 def build_page_index(repo_id: str) -> list[dict]:
-    """Corre un `mkdocs build` real (mismos hooks/plugins que la wiki en
-    vivo) contra el clon de `repo_id`, a un directorio temporal, y
-    extrae {title, location} de cada pagina real de su
-    `search_index.json` (se descartan las entradas de sub-encabezado,
-    que traen '#' en la location). Asi las URLs del hub coinciden
-    exactamente con lo que servira /wiki/ una vez que ese repo este
-    activo -- no se reimplementa el slugify por separado."""
+    """Extrae {title, location} de cada pagina real del repo sin pagar un
+    `mkdocs build` completo: arma el inventario de archivos (`get_files`),
+    corre el evento `on_files` (asi `slugify_urls.py` normaliza las URLs
+    igual que en la wiki servida) y arma la navegacion (`get_navigation`,
+    que asigna cada `Page` a su `File`) -- pero nunca renderiza Markdown a
+    HTML ni copia los assets del tema, que era el costo real de la version
+    anterior (un `mkdocs build` completo solo para leer dos campos).
+    `Page.title`, tras solo `read_source()`, ya resuelve el titulo con la
+    misma prioridad que usaba el plugin de busqueda (meta 'title' -> primer
+    H1 del Markdown crudo -> nombre de archivo), sin necesitar el render.
+    Verificado contra el codigo fuente instalado que ninguno de los
+    plugins activos (search, ezlinks, embed_file, callouts) depende de
+    pasos posteriores a on_files/get_navigation para esto."""
     dest = REPOS_DIR / repo_id
     if not (dest / ".git").exists():
         return []
@@ -278,78 +306,61 @@ def build_page_index(repo_id: str) -> list[dict]:
             config = mkdocs_load_config(
                 str(PROJECT_ROOT / "mkdocs.yml"), docs_dir=str(dest), site_dir=tmp
             )
-            mkdocs_build_site(config)
+            config = config.plugins.on_config(config)
+            files = get_files(config)
+            files = config.plugins.on_files(files, config=config)
+            get_navigation(files, config)
+
+            pages = []
+            for file in files.documentation_pages():
+                page = file.page
+                page.read_source(config)
+                pages.append({"title": page.title or file.url, "location": file.url})
         except Exception:
             return []
-        index_path = Path(tmp) / "search" / "search_index.json"
-        if not index_path.exists():
-            return []
-        data = json.loads(index_path.read_text())
-
-    pages = []
-    for entry in data.get("docs", []):
-        location = entry.get("location", "")
-        if "#" in location:
-            continue
-        pages.append({"title": entry.get("title") or location, "location": location})
     return pages
 
 
 def refresh_page_index(repo_id: str) -> None:
     PAGE_INDEX[repo_id] = build_page_index(repo_id)
+    LAST_UPDATE[repo_id] = repo_last_update(repo_id)
     PAGE_INDEX_PATH.write_text(json.dumps(PAGE_INDEX, indent=2, ensure_ascii=False))
 
 
-def scrub_token(text: str, token: str | None) -> str:
-    if token:
-        text = text.replace(token, "***")
-    return text
-
-
-def authenticated_url(repo_url: str, token: str | None) -> str:
-    if not token:
-        return repo_url
-    match = re.match(r"^https://(.+)$", repo_url)
-    if not match:
-        return repo_url
-    return f"https://{token}@{match.group(1)}"
-
-
 def run_sync(repo_url: str, token: str | None, dest: Path) -> tuple[bool, str]:
-    """Clona `dest` si no existe, o hace pull si ya existe."""
-    clone_url = authenticated_url(repo_url, token)
+    """Clona `dest` si no existe, o hace pull (fetch + fast-forward) si ya
+    existe. Via pygit2/libgit2 en vez del `git` del sistema -- no depende
+    de que el usuario tenga git instalado, y el token viaja por
+    `RemoteCallbacks` en vez de incrustado en la URL del proceso, asi
+    nunca queda visible en la lista de procesos (`ps`) de la maquina --
+    limitacion que tenia la version anterior (subprocess), ver
+    02 Motores de backend.md. Probado con clone/pull sin cambios/pull con
+    fast-forward/pull con historias divergentes contra un repo bare
+    local, y con el callback de credenciales contra un repo real."""
+    callbacks = pygit2.RemoteCallbacks(credentials=pygit2.UserPass(token, "")) if token else None
     try:
         if not (dest / ".git").exists():
-            result = subprocess.run(
-                ["git", "clone", clone_url, str(dest)],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-        else:
-            # Si cambio el token o la URL, se actualiza el remoto antes de tirar de el.
-            subprocess.run(
-                ["git", "remote", "set-url", "origin", clone_url],
-                cwd=dest,
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            result = subprocess.run(
-                ["git", "pull", "--ff-only", "origin"],
-                cwd=dest,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-    except subprocess.TimeoutExpired:
-        return False, "Tiempo de espera agotado conectando al repositorio."
+            pygit2.clone_repository(repo_url, str(dest), callbacks=callbacks)
+            return True, "Sincronización correcta."
 
-    ok = result.returncode == 0
-    output = scrub_token((result.stdout or "") + (result.stderr or ""), token)
-    if ok:
+        repo = pygit2.Repository(str(dest))
+        repo.remotes["origin"].fetch(callbacks=callbacks)
+
+        branch_name = repo.head.shorthand
+        remote_head = repo.references[f"refs/remotes/origin/{branch_name}"].target
+
+        analysis, _ = repo.merge_analysis(remote_head)
+        if analysis & pygit2.enums.MergeAnalysis.UP_TO_DATE:
+            return True, "Sincronización correcta."
+        if not (analysis & pygit2.enums.MergeAnalysis.FASTFORWARD):
+            return False, "No se pudo sincronizar: hay cambios locales que ya no coinciden con el repositorio remoto."
+
+        repo.checkout_tree(repo.get(remote_head))
+        repo.lookup_reference(f"refs/heads/{branch_name}").set_target(remote_head)
+        repo.head.set_target(remote_head)
         return True, "Sincronización correcta."
-    return False, output.strip() or "Error desconocido al sincronizar."
+    except pygit2.GitError as e:
+        return False, str(e) or "Error desconocido al sincronizar."
 
 
 def mkdocs_is_running() -> bool:
@@ -407,9 +418,14 @@ def spawn_mkdocs() -> None:
 
 
 def ensure_mkdocs_running() -> None:
-    """Arranca mkdocs solo si no hay nada escuchando en el puerto. Se usa
-    tras un resync (pull en caliente sobre el repo activo), donde el
-    watcher si funciona porque el symlink no cambio de destino."""
+    """Arranca mkdocs solo si no hay nada escuchando en el puerto -- red de
+    seguridad para las rutas de /wiki en caso de que el proceso muriera
+    entre requests. No sirve para recoger contenido nuevo: `mkdocs serve
+    --no-livereload` no activa ningun watcher de archivos (confirmado en
+    el codigo fuente de mkdocs.commands.serve, el watch solo se registra
+    si `livereload=True`), asi que un pull en caliente sobre el repo
+    activo nunca se refleja mientras el proceso siga vivo. Para eso hace
+    falta restart_mkdocs() (ver resync())."""
     if not mkdocs_is_running():
         spawn_mkdocs()
 
@@ -528,7 +544,10 @@ def resync(request: Request):
     token = keyring.get_password(KEYRING_SERVICE, token_key(active["id"]))
     ok, message = run_sync(active["repo_url"], token, REPOS_DIR / active["id"])
     if ok:
-        ensure_mkdocs_running()
+        # restart_mkdocs(), no ensure_mkdocs_running(): sin esto el pull
+        # se traia a disco pero nunca se veia reflejado en la wiki servida
+        # (ver docstring de ensure_mkdocs_running).
+        restart_mkdocs()
         refresh_page_index(active["id"])
     return render_admin(request, config, sync_message=message, sync_ok=ok)
 
@@ -625,7 +644,7 @@ def hub(request: Request):
                 "owner": repo_owner(r["repo_url"]),
                 "badge": badge_class(r["id"]),
                 "page_count": len(pages),
-                "last_update": relative_date(repo_last_update(r["id"])),
+                "last_update": relative_date(cached_last_update(r["id"])),
                 "search": search_blob,
             }
         )
@@ -635,31 +654,41 @@ def hub(request: Request):
         {"repos": repos, "active_id": config["active_id"]},
     )
 
-    return RedirectResponse(f"/wiki/{loc}", status_code=303)
-
 
 @app.get("/_docs")
 def docs():
-    """Documentacion de uso de la app: la conecta (o la selecciona si ya
-    estaba) y manda directo a /wiki. Sin DOCS_REPO_URL todavia, cae a
-    /_admin -- no hay nada que mostrar. (No es "/docs": FastAPI ya usa
-    esa ruta para su propio Swagger UI.)"""
+    """Documentacion de uso de la app: la sincroniza y manda directo a
+    /wiki. Sin DOCS_REPO_URL todavia, cae a /_admin -- no hay nada que
+    mostrar. (No es "/docs": FastAPI ya usa esa ruta para su propio
+    Swagger UI.)
+
+    A proposito NUNCA se agrega a config["repos"]: es un recurso fijo de
+    la app, mantenido por quien la desarrolla, no un repo que el usuario
+    conecto. Si se guardara ahi igual que un repo normal, aparecia como
+    tarjeta en el Hub (como si el usuario lo hubiera agregado) y como fila
+    "Quitar"-able en el panel de Repositorios -- pudiendo incluso borrarlo
+    por accidente. get_active_repo() sabe reconocerlo igual como activo
+    sin que viva en esa lista."""
     if not DOCS_REPO_URL:
         return RedirectResponse("/_admin", status_code=303)
 
-    config = read_config()
     repo_id = repo_id_for(DOCS_REPO_URL)
-    if get_repo(config, repo_id) is None:
-        ok, _ = run_sync(DOCS_REPO_URL, None, REPOS_DIR / repo_id)
-        if not ok:
-            return RedirectResponse("/_admin", status_code=303)
-        config["repos"].append({"id": repo_id, "repo_url": DOCS_REPO_URL})
+    dest = REPOS_DIR / repo_id
+    run_sync(DOCS_REPO_URL, None, dest)
+    if not (dest / ".git").exists():
+        # Nunca se pudo clonar (ni antes ni ahora) -- no hay nada que servir.
+        return RedirectResponse("/_admin", status_code=303)
 
+    config = read_config()
     if config["active_id"] != repo_id:
         config["active_id"] = repo_id
+        # write_config antes de restart_mkdocs: expose_active_repo.py lee
+        # config.json del disco al reiniciar, si se escribe despues el
+        # nombre del repo en la ruta (breadcrumb) queda un ciclo atrasado.
+        write_config(config)
         set_active_symlink(repo_id)
         restart_mkdocs()
-    write_config(config)
+
     return RedirectResponse("/wiki", status_code=303)
 
 
