@@ -23,7 +23,7 @@ def on_config(config, **kwargs):
     config_path = PROJECT_ROOT / "webapp" / "config.json"
     name = "wiki"
     if config_path.exists():
-        data = json.loads(config_path.read_text())
+        data = json.loads(config_path.read_text(encoding="utf-8"))
         active_id = data.get("active_id")
         repo = next((r for r in data.get("repos", []) if r["id"] == active_id), None)
         if repo:
@@ -31,5 +31,5 @@ def on_config(config, **kwargs):
     config.extra["active_repo_name"] = name
 
     version_path = PROJECT_ROOT / "VERSION"
-    config.extra["app_version"] = version_path.read_text().strip() if version_path.exists() else "?"
+    config.extra["app_version"] = version_path.read_text(encoding="utf-8").strip() if version_path.exists() else "?"
     return config

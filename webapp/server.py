@@ -13,24 +13,27 @@ glassmorphism) que vive incrustado en el shell y en el header de la
 wiki -- ver `openAboutModal()`.
 
 Multi-repo (simple, a proposito): cada repo conectado vive clonado en
-`repos/<repo_id>/`. Solo uno esta "activo" a la vez -- `synced_docs/`
-(el `docs_dir` fijo de `mkdocs.yml`) es un symlink que se repunta al
-repo activo en cada seleccion, y `mkdocs serve` se reinicia para que
-recoja el cambio (el watcher no detecta symlinks re-apuntados, mismo
-problema documentado para el re-clone en 04 Pantalla de conexion). No
-hay N procesos de mkdocs corriendo en paralelo: mas simple, y solo uno
-se ve a la vez de todas formas.
+`repos/<repo_id>/`. Solo uno esta "activo" a la vez -- en cada seleccion
+se genera `_runtime_mkdocs.yml` (copia de `mkdocs.yml` con `docs_dir`
+apuntando directo a la ruta absoluta del repo activo, ver
+`set_active_docs_dir()`) y `mkdocs serve` se reinicia para que lo
+recoja. Sin symlink de por medio a proposito: Windows no crea symlinks
+estilo Unix sin privilegios especiales, y el watcher de archivos de
+mkdocs tampoco detectaba cuando un symlink cambiaba de destino -- las
+dos razones desaparecen al no depender de symlinks en ninguna
+plataforma. No hay N procesos de mkdocs corriendo en paralelo: mas
+simple, y solo uno se ve a la vez de todas formas.
 
 El token de cada repo se guarda en el keychain nativo del SO (via
-`keyring`, backend SecretService en Linux/gnome-keyring) bajo una clave
-por repo -- nunca en `config.json` ni en disco en texto plano.
+`keyring`, backend SecretService en Linux/gnome-keyring, Credential
+Locker en Windows) bajo una clave por repo -- nunca en `config.json` ni
+en disco en texto plano.
 
-Prototipo: usa el `git` del sistema via subprocess, con el token
-embebido en la URL de clone solo para el proceso hijo. La version final
-(Tauri + git2-rs) pasara las credenciales por `RemoteCallbacks` en vez
-de la URL, para no dejarlas visibles en la lista de procesos (`ps`) de
-la maquina -- limitacion conocida de este prototipo, ver 02 Motores de
-backend.md.
+Sincronizacion via `pygit2`/`libgit2` (clone/fetch + fast-forward
+manual, ver `run_sync()`) -- no depende de que el usuario tenga `git`
+instalado, y las credenciales pasan por `RemoteCallbacks` en vez de la
+URL del proceso, para no dejarlas visibles en la lista de procesos
+(`ps`) de la maquina.
 """
 
 import json
@@ -62,7 +65,8 @@ from mkdocs.structure.nav import get_navigation
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REPOS_DIR = PROJECT_ROOT / "repos"
 REPOS_DIR.mkdir(exist_ok=True)
-SYNCED_DOCS = PROJECT_ROOT / "synced_docs"
+SYNCED_DOCS = PROJECT_ROOT / "synced_docs"  # solo para migrar instalaciones viejas, ver _migrate_legacy_config
+RUNTIME_MKDOCS_CONFIG = PROJECT_ROOT / "_runtime_mkdocs.yml"
 CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
 PAGE_INDEX_PATH = Path(__file__).resolve().parent / "page_index.json"
 MKDOCS_PID_PATH = Path(__file__).resolve().parent / "mkdocs.pid"
@@ -71,7 +75,7 @@ MKDOCS_HOST, MKDOCS_PORT = "127.0.0.1", 8765
 KEYRING_SERVICE = "wiki-desktop-client"
 LEGACY_TOKEN_KEY = "github-pat"  # esquema de un solo repo, pre-multi-repo
 
-APP_VERSION = (PROJECT_ROOT / "VERSION").read_text().strip()
+APP_VERSION = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 # Repo fijo con la documentacion de uso de la app (no del contenido de
 # un equipo) -- distinto de los repos que el usuario conecta. Vacio
@@ -92,7 +96,7 @@ startup_sync: tuple[bool, str] | None = None
 # disco para no tener que reconstruir todo en cada arranque.
 PAGE_INDEX: dict[str, list[dict]] = {}
 if PAGE_INDEX_PATH.exists():
-    PAGE_INDEX = json.loads(PAGE_INDEX_PATH.read_text())
+    PAGE_INDEX = json.loads(PAGE_INDEX_PATH.read_text(encoding="utf-8"))
 
 # Cache en memoria de la fecha del ultimo commit por repo, poblado junto
 # con PAGE_INDEX (ver refresh_page_index). Sin esto, hub() invocaba un
@@ -119,7 +123,7 @@ async def lifespan(app: FastAPI):
         # internet): sirve el contenido de la ultima sincronizacion buena
         # que haya en disco, en vez de dejar al usuario sin nada.
         if (dest / ".git").exists():
-            set_active_symlink(active["id"])
+            set_active_docs_dir(active["id"])
             ensure_mkdocs_running()
             refresh_page_index(active["id"])
 
@@ -161,14 +165,14 @@ def default_config() -> dict:
 def read_config() -> dict:
     if not CONFIG_PATH.exists():
         return default_config()
-    data = json.loads(CONFIG_PATH.read_text())
+    data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     if "repo_url" in data:
         return _migrate_legacy_config(data)
     return data
 
 
 def write_config(config: dict) -> None:
-    CONFIG_PATH.write_text(json.dumps(config, indent=2))
+    CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 
 def _migrate_legacy_config(data: dict) -> dict:
@@ -210,15 +214,27 @@ def get_active_repo(config: dict) -> dict | None:
     return get_repo(config, config["active_id"])
 
 
-def set_active_symlink(repo_id: str | None) -> None:
-    """Repunta `synced_docs/` (el docs_dir fijo de mkdocs.yml) al repo
-    activo. `repo_id=None` lo borra sin reemplazo (sin repo activo)."""
-    if SYNCED_DOCS.is_symlink():
-        SYNCED_DOCS.unlink()
-    elif SYNCED_DOCS.exists():
-        shutil.rmtree(SYNCED_DOCS)
-    if repo_id is not None:
-        SYNCED_DOCS.symlink_to(REPOS_DIR / repo_id, target_is_directory=True)
+def set_active_docs_dir(repo_id: str | None) -> None:
+    """Genera `_runtime_mkdocs.yml` -- copia de `mkdocs.yml` con
+    `docs_dir` apuntando directo a la ruta absoluta del repo activo.
+    `repo_id=None` borra el archivo generado (sin repo activo).
+
+    Reemplaza el symlink `synced_docs/` que usaba la version anterior:
+    Windows no crea symlinks estilo Unix sin privilegios especiales
+    (Modo de desarrollador/Administrador), y ademas `Path.is_symlink()`
+    ni siquiera detecta de forma confiable un symlink ya creado en esa
+    plataforma (confirmado corriendo bajo Windows/Wine: lo reporta como
+    carpeta normal) -- se prefiere no depender de symlinks en absoluto,
+    en ninguna plataforma. Mismo patron que ya usaba `build_page_index()`
+    para overridear `docs_dir` via la API de Python, aqui aplicado al
+    `mkdocs serve` que corre como subproceso via `-f/--config-file`."""
+    if repo_id is None:
+        RUNTIME_MKDOCS_CONFIG.unlink(missing_ok=True)
+        return
+    base = (PROJECT_ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    dest = (REPOS_DIR / repo_id).resolve()
+    updated = re.sub(r"(?m)^docs_dir:.*$", f"docs_dir: {dest.as_posix()}", base)
+    RUNTIME_MKDOCS_CONFIG.write_text(updated, encoding="utf-8")
 
 
 def repo_display_name(repo_url: str) -> str:
@@ -324,7 +340,7 @@ def build_page_index(repo_id: str) -> list[dict]:
 def refresh_page_index(repo_id: str) -> None:
     PAGE_INDEX[repo_id] = build_page_index(repo_id)
     LAST_UPDATE[repo_id] = repo_last_update(repo_id)
-    PAGE_INDEX_PATH.write_text(json.dumps(PAGE_INDEX, indent=2, ensure_ascii=False))
+    PAGE_INDEX_PATH.write_text(json.dumps(PAGE_INDEX, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def run_sync(repo_url: str, token: str | None, dest: Path) -> tuple[bool, str]:
@@ -372,17 +388,18 @@ def mkdocs_is_running() -> bool:
 def kill_mkdocs() -> None:
     """Mata el mkdocs serve que lanzamos nosotros (via pidfile propio).
 
-    Necesario porque el watcher de archivos de `mkdocs serve` no detecta
-    que `synced_docs/` cambio de destino (symlink re-apuntado o
-    re-clone: nuevo inodo, mismo path): se queda sirviendo el build
-    viejo indefinidamente. La unica forma confiable de servir el
-    contenido nuevo es reiniciar el proceso, no reusar uno que ya
-    estaba corriendo.
+    Necesario porque `mkdocs serve --no-livereload` no activa ningun
+    watcher de archivos (confirmado en el codigo fuente de
+    mkdocs.commands.serve): un cambio de repo activo (nuevo
+    `_runtime_mkdocs.yml`, ver `set_active_docs_dir()`) o un pull en
+    caliente nunca se reflejan mientras el proceso siga vivo. La unica
+    forma confiable de servir contenido nuevo es reiniciar el proceso,
+    no reusar uno que ya estaba corriendo.
     """
     if not MKDOCS_PID_PATH.exists():
         return
     try:
-        pid = int(MKDOCS_PID_PATH.read_text().strip())
+        pid = int(MKDOCS_PID_PATH.read_text(encoding="utf-8").strip())
         os.kill(pid, signal.SIGTERM)
         for _ in range(20):
             try:
@@ -404,13 +421,18 @@ def spawn_mkdocs() -> None:
     # porque el contenido no cambia por edicion local en vivo, sino por
     # /resync o un cambio de repo activo, que ya reinician el proceso.
     proc = subprocess.Popen(
-        [sys.executable, "-m", "mkdocs", "serve", "-a", f"{MKDOCS_HOST}:{MKDOCS_PORT}", "--no-livereload"],
+        [
+            sys.executable, "-m", "mkdocs", "serve",
+            "-f", str(RUNTIME_MKDOCS_CONFIG),
+            "-a", f"{MKDOCS_HOST}:{MKDOCS_PORT}",
+            "--no-livereload",
+        ],
         cwd=PROJECT_ROOT,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    MKDOCS_PID_PATH.write_text(str(proc.pid))
+    MKDOCS_PID_PATH.write_text(str(proc.pid), encoding="utf-8")
     for _ in range(20):
         if mkdocs_is_running():
             return
@@ -433,7 +455,7 @@ def ensure_mkdocs_running() -> None:
 def restart_mkdocs() -> None:
     """Reinicia mkdocs siempre. Se usa cuando el repo activo cambia
     (conectar uno nuevo o seleccionar otro ya conectado), porque
-    synced_docs/ paso a apuntar a un directorio distinto."""
+    `_runtime_mkdocs.yml` paso a apuntar a un directorio distinto."""
     kill_mkdocs()
     spawn_mkdocs()
 
@@ -515,7 +537,7 @@ def connect(request: Request, repo_url: str = Form(...), token: str = Form("")):
     config["active_id"] = repo_id
     write_config(config)
 
-    set_active_symlink(repo_id)
+    set_active_docs_dir(repo_id)
     restart_mkdocs()
     refresh_page_index(repo_id)
     # A "/_admin", no a "/": el usuario necesita ver el resultado del
@@ -530,7 +552,7 @@ def select(repo_id: str):
         return RedirectResponse("/_admin", status_code=303)
     config["active_id"] = repo_id
     write_config(config)
-    set_active_symlink(repo_id)
+    set_active_docs_dir(repo_id)
     restart_mkdocs()
     return RedirectResponse("/wiki", status_code=303)
 
@@ -574,10 +596,10 @@ def disconnect(repo_id: str):
     shutil.rmtree(REPOS_DIR / repo_id, ignore_errors=True)
 
     PAGE_INDEX.pop(repo_id, None)
-    PAGE_INDEX_PATH.write_text(json.dumps(PAGE_INDEX, indent=2, ensure_ascii=False))
+    PAGE_INDEX_PATH.write_text(json.dumps(PAGE_INDEX, indent=2, ensure_ascii=False), encoding="utf-8")
 
     if was_active:
-        set_active_symlink(None)
+        set_active_docs_dir(None)
         kill_mkdocs()
 
     return RedirectResponse("/_admin", status_code=303)
@@ -686,7 +708,7 @@ def docs():
         # config.json del disco al reiniciar, si se escribe despues el
         # nombre del repo en la ruta (breadcrumb) queda un ciclo atrasado.
         write_config(config)
-        set_active_symlink(repo_id)
+        set_active_docs_dir(repo_id)
         restart_mkdocs()
 
     return RedirectResponse("/wiki", status_code=303)
@@ -704,7 +726,7 @@ async def wiki_index(request: Request):
 async def wiki_proxy(request: Request, path: str):
     """Todo el contenido de la wiki (paginas, assets, search_index.json)
     vive bajo /wiki/ -- un prefijo fijo, no por repo, porque solo un
-    repo esta activo a la vez (ver set_active_symlink). `mkdocs serve`
+    repo esta activo a la vez (ver set_active_docs_dir). `mkdocs serve`
     ya sirve su contenido bajo ese mismo prefijo internamente (efecto de
     `site_url: http://.../wiki/` en mkdocs.yml), asi que se reenvia la
     ruta completa tal cual -- no hay que reescribir nada."""

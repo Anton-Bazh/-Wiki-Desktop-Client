@@ -3,6 +3,7 @@
 __pycache__/
 site/
 synced_docs
+_runtime_mkdocs.yml
 repos/
 .venv/
 # Python autocontenido (python-build-standalone) por plataforma -- se

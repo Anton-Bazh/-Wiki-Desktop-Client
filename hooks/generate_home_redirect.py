@@ -36,5 +36,6 @@ def on_post_build(config):
 <meta http-equiv="refresh" content="0; url={first_page_url}">
 <link rel="canonical" href="{first_page_url}">
 <p>Redirigiendo a <a href="{first_page_url}">{first_page_url}</a>...</p>
-"""
+""",
+        encoding="utf-8",
     )
