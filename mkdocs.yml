@@ -1,5 +1,6 @@
 site_name: Wiki Desktop Client
 site_description: Documentación técnica en equipo, docs-as-code sobre Git.
+site_url: http://127.0.0.1:8765/
 
 theme:
   name: material
@@ -38,9 +39,21 @@ markdown_extensions:
         - name: mermaid
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_code_format
+  - attr_list
   - tables
   - toc:
       permalink: true
+
+hooks:
+  - hooks/fix_ezlinks_anchors.py
+
+plugins:
+  - search
+  - ezlinks:
+      wikilinks: true
+      warn_ambiguities: true
+  - embed_file:
+      callouts: true
 
 nav:
   - Inicio: index.md

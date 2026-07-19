@@ -1,0 +1,10 @@
+# Motor de renderizado (MkDocs + Material). Version fijada por el aviso de
+# ruptura de compatibilidad de MkDocs 2.0 (ver 01 Vision y arquitectura general.md).
+mkdocs<2.0,==1.6.1
+mkdocs-material==9.7.7
+
+# Wikilinks y transclusion estilo Obsidian (ver 02 Motores de backend.md).
+mkdocs-obsidian-links==1.0.4
+mkdocs-embed-file-plugins==2.0.10
+mkdocs-callouts==1.16.1
+mkdocs-custom-tags-attributes==0.3.3
