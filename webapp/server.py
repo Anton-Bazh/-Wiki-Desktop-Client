@@ -63,13 +63,46 @@ from mkdocs.structure.files import get_files
 from mkdocs.structure.nav import get_navigation
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-REPOS_DIR = PROJECT_ROOT / "repos"
-REPOS_DIR.mkdir(exist_ok=True)
 SYNCED_DOCS = PROJECT_ROOT / "synced_docs"  # solo para migrar instalaciones viejas, ver _migrate_legacy_config
-RUNTIME_MKDOCS_CONFIG = PROJECT_ROOT / "_runtime_mkdocs.yml"
-CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
-PAGE_INDEX_PATH = Path(__file__).resolve().parent / "page_index.json"
-MKDOCS_PID_PATH = Path(__file__).resolve().parent / "mkdocs.pid"
+
+
+def _project_root_writable() -> bool:
+    try:
+        probe = PROJECT_ROOT / ".write_test"
+        probe.touch()
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+# Directorio donde vive el estado que la app escribe en caliente (config,
+# indice de paginas, pid de mkdocs, clones de repos, config de mkdocs
+# generado). En un checkout de desarrollo o en el instalable de Windows
+# (que vive en `$LOCALAPPDATA`, ya de por si escribible por el usuario),
+# es el propio `PROJECT_ROOT` -- mismas rutas que siempre (config.json
+# junto a server.py, repos/ y _runtime_mkdocs.yml junto al mkdocs.yml
+# fuente). El paquete `.deb` de Linux en cambio instala el codigo bajo
+# `/opt/marc`, propiedad de root -- ahi PROJECT_ROOT no admite escritura,
+# asi que todo el estado se mueve junto a `~/.local/share/marc` (XDG data
+# dir), igual que cualquier otra app de escritorio en Linux separa
+# binarios de estado de usuario.
+if _project_root_writable():
+    REPOS_DIR = PROJECT_ROOT / "repos"
+    RUNTIME_MKDOCS_CONFIG = PROJECT_ROOT / "_runtime_mkdocs.yml"
+    CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
+    PAGE_INDEX_PATH = Path(__file__).resolve().parent / "page_index.json"
+    MKDOCS_PID_PATH = Path(__file__).resolve().parent / "mkdocs.pid"
+else:
+    _STATE_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "marc"
+    _STATE_DIR.mkdir(parents=True, exist_ok=True)
+    REPOS_DIR = _STATE_DIR / "repos"
+    RUNTIME_MKDOCS_CONFIG = _STATE_DIR / "_runtime_mkdocs.yml"
+    CONFIG_PATH = _STATE_DIR / "config.json"
+    PAGE_INDEX_PATH = _STATE_DIR / "page_index.json"
+    MKDOCS_PID_PATH = _STATE_DIR / "mkdocs.pid"
+
+REPOS_DIR.mkdir(exist_ok=True)
 MKDOCS_HOST, MKDOCS_PORT = "127.0.0.1", 8765
 
 KEYRING_SERVICE = "wiki-desktop-client"
@@ -227,13 +260,36 @@ def set_active_docs_dir(repo_id: str | None) -> None:
     carpeta normal) -- se prefiere no depender de symlinks en absoluto,
     en ninguna plataforma. Mismo patron que ya usaba `build_page_index()`
     para overridear `docs_dir` via la API de Python, aqui aplicado al
-    `mkdocs serve` que corre como subproceso via `-f/--config-file`."""
+    `mkdocs serve` que corre como subproceso via `-f/--config-file`.
+
+    `custom_dir` (tema) y cada entrada de `hooks:` tambien son rutas
+    relativas en `mkdocs.yml`, pero MkDocs las resuelve relativas a la
+    carpeta del propio archivo de config, no a `PROJECT_ROOT` -- mientras
+    `_runtime_mkdocs.yml` vivia siempre junto a `mkdocs.yml` (dentro de
+    `PROJECT_ROOT`) esto pasaba desapercibido. Con el paquete `.deb` de
+    Linux, `_runtime_mkdocs.yml` puede vivir en `STATE_DIR` (ver arriba,
+    `/opt/marc` de solo lectura), separado de `theme_overrides/` y
+    `hooks/`, que solo existen en `PROJECT_ROOT` -- sin este ajuste,
+    `mkdocs serve` aborta con un error de configuracion antes de escuchar
+    en `MKDOCS_PORT`, y el proxy nunca ve otra cosa que un connection
+    refused (confirmado reproduciendo el paquete: `mkdocs serve` moria en
+    el arranque, `/wiki` devolvia 503 con "La wiki no esta disponible")."""
     if repo_id is None:
         RUNTIME_MKDOCS_CONFIG.unlink(missing_ok=True)
         return
     base = (PROJECT_ROOT / "mkdocs.yml").read_text(encoding="utf-8")
     dest = (REPOS_DIR / repo_id).resolve()
     updated = re.sub(r"(?m)^docs_dir:.*$", f"docs_dir: {dest.as_posix()}", base)
+    updated = re.sub(
+        r"(?m)^(\s*custom_dir:\s*)theme_overrides\s*$",
+        lambda m: f"{m.group(1)}{(PROJECT_ROOT / 'theme_overrides').as_posix()}",
+        updated,
+    )
+    updated = re.sub(
+        r"(?m)^(\s*-\s*)hooks/([a-zA-Z0-9_]+\.py)\s*$",
+        lambda m: f"{m.group(1)}{(PROJECT_ROOT / 'hooks' / m.group(2)).as_posix()}",
+        updated,
+    )
     RUNTIME_MKDOCS_CONFIG.write_text(updated, encoding="utf-8")
 
 

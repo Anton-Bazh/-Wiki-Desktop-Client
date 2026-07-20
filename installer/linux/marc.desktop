@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=MARC
+Comment=Markdown Automatizado por Repo y Consulta
+Exec=/opt/marc/python/bin/python3 -s /opt/marc/launcher.py
+Icon=marc
+Terminal=false
+Categories=Office;Utility;
+StartupNotify=true
