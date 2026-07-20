@@ -3,8 +3,8 @@
 __pycache__/
 site/
 synced_docs
-_runtime_mkdocs.yml
 repos/
+sites/
 .venv/
 # Python autocontenido (python-build-standalone) por plataforma -- se
 # descarga e instala con runtime/requirements.lock.txt, no se versiona.
@@ -13,6 +13,5 @@ runtime/*/
 # no se versionan.
 dist/
 webapp/config.json
-webapp/mkdocs.pid
 webapp/page_index.json
 webapp/__pycache__/

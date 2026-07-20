@@ -57,7 +57,7 @@ Section "MARC (nucleo)" SEC_CORE
   File /r /x "__pycache__" "..\..\runtime\windows-x86_64\python\*.*"
 
   SetOutPath "$INSTDIR\webapp"
-  File /r /x "__pycache__" /x "config.json" /x "mkdocs.pid" /x "page_index.json" "..\..\webapp\*.*"
+  File /r /x "__pycache__" /x "config.json" /x "page_index.json" "..\..\webapp\*.*"
 
   SetOutPath "$INSTDIR\hooks"
   File /r /x "__pycache__" "..\..\hooks\*.*"
@@ -76,6 +76,13 @@ Section "MARC (nucleo)" SEC_CORE
   File "..\..\VERSION"
   File "launcher.py"
   File "assets\installer.ico"
+
+  ; Huerfanos de una instalacion 1.0.2 o anterior (mkdocs serve + proxy,
+  ; reemplazado por sitios estaticos -- ver build_site() en server.py):
+  ; nunca se vuelven a crear, se limpian aqui para que una actualizacion
+  ; no deje basura sin sentido.
+  Delete "$INSTDIR\_runtime_mkdocs.yml"
+  Delete "$INSTDIR\webapp\mkdocs.pid"
 
   WriteRegStr HKCU "Software\MARC" "InstallDir" "$INSTDIR"
 
@@ -134,7 +141,6 @@ Section "Uninstall"
   Delete "$INSTDIR\VERSION"
   Delete "$INSTDIR\launcher.py"
   Delete "$INSTDIR\installer.ico"
-  Delete "$INSTDIR\_runtime_mkdocs.yml"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
 

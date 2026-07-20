@@ -40,8 +40,8 @@ echo "Copiando runtime de Python..."
 rsync -a --exclude='__pycache__' "runtime/linux-x86_64/python/" "$APP_DIR/python/"
 
 echo "Copiando aplicacion..."
-rsync -a --exclude='__pycache__' --exclude='config.json' --exclude='mkdocs.pid' \
-  --exclude='page_index.json' "webapp/" "$APP_DIR/webapp/"
+rsync -a --exclude='__pycache__' --exclude='config.json' --exclude='page_index.json' \
+  "webapp/" "$APP_DIR/webapp/"
 rsync -a --exclude='__pycache__' "hooks/" "$APP_DIR/hooks/"
 rsync -a "branding/" "$APP_DIR/branding/"
 rsync -a "vendor/" "$APP_DIR/vendor/"

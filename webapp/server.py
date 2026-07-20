@@ -4,25 +4,24 @@
 FastAPI es el unico puerto que el usuario ve, con tres zonas:
 - `/` -- el hub: que repos hay conectados, accesos directos.
 - `/_admin` -- conectar, seleccionar y quitar repositorios.
-- `/wiki/...` -- el contenido en si, reenviado (proxy HTTP) al proceso
-  interno `mkdocs serve` (`MKDOCS_HOST:MKDOCS_PORT`), que nunca se
-  expone aparte -- ver `proxy_to_mkdocs()`.
+- `/wiki/...` -- el contenido en si, servido directo desde el sitio
+  estatico ya construido del repo activo -- ver `serve_site()`.
 
 "Acerca de" no es una pantalla propia: es un modal (`about_modal.html`,
 glassmorphism) que vive incrustado en el shell y en el header de la
 wiki -- ver `openAboutModal()`.
 
 Multi-repo (simple, a proposito): cada repo conectado vive clonado en
-`repos/<repo_id>/`. Solo uno esta "activo" a la vez -- en cada seleccion
-se genera `_runtime_mkdocs.yml` (copia de `mkdocs.yml` con `docs_dir`
-apuntando directo a la ruta absoluta del repo activo, ver
-`set_active_docs_dir()`) y `mkdocs serve` se reinicia para que lo
-recoja. Sin symlink de por medio a proposito: Windows no crea symlinks
-estilo Unix sin privilegios especiales, y el watcher de archivos de
-mkdocs tampoco detectaba cuando un symlink cambiaba de destino -- las
-dos razones desaparecen al no depender de symlinks en ninguna
-plataforma. No hay N procesos de mkdocs corriendo en paralelo: mas
-simple, y solo uno se ve a la vez de todas formas.
+`repos/<repo_id>/`, y su sitio ya renderizado (Markdown a HTML, assets
+del tema, `search_index.json`) vive en `sites/<repo_id>/` -- generado con
+`mkdocs.commands.build.build()` (API de Python de MkDocs, sin subproceso)
+cada vez que ese repo se sincroniza, ver `build_site()`. Solo uno esta
+"activo" a la vez para el usuario, pero cambiar cual lo esta (`select()`)
+no reconstruye nada ni reinicia ningun proceso: es servir archivos de una
+carpeta de `sites/` en vez de otra. Sin symlink de por medio a proposito
+(Windows no crea symlinks estilo Unix sin privilegios especiales): cada
+repo tiene su propia carpeta de salida fija, no hay una ruta "activa"
+compartida que reapuntar.
 
 El token de cada repo se guarda en el keychain nativo del SO (via
 `keyring`, backend SecretService en Linux/gnome-keyring, Credential
@@ -40,24 +39,19 @@ import json
 import os
 import re
 import shutil
-import signal
-import socket
-import subprocess
-import sys
 import tempfile
-import time
 import unicodedata
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import httpx
 import keyring
 import pygit2
-from fastapi import FastAPI, Form, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from mkdocs.commands.build import build as mkdocs_build
 from mkdocs.config import load_config as mkdocs_load_config
 from mkdocs.structure.files import get_files
 from mkdocs.structure.nav import get_navigation
@@ -77,33 +71,30 @@ def _project_root_writable() -> bool:
 
 
 # Directorio donde vive el estado que la app escribe en caliente (config,
-# indice de paginas, pid de mkdocs, clones de repos, config de mkdocs
-# generado). En un checkout de desarrollo o en el instalable de Windows
-# (que vive en `$LOCALAPPDATA`, ya de por si escribible por el usuario),
-# es el propio `PROJECT_ROOT` -- mismas rutas que siempre (config.json
-# junto a server.py, repos/ y _runtime_mkdocs.yml junto al mkdocs.yml
-# fuente). El paquete `.deb` de Linux en cambio instala el codigo bajo
-# `/opt/marc`, propiedad de root -- ahi PROJECT_ROOT no admite escritura,
-# asi que todo el estado se mueve junto a `~/.local/share/marc` (XDG data
-# dir), igual que cualquier otra app de escritorio en Linux separa
-# binarios de estado de usuario.
+# indice de paginas, clones de repos, sitios estaticos ya construidos).
+# En un checkout de desarrollo o en el instalable de Windows (que vive en
+# `$LOCALAPPDATA`, ya de por si escribible por el usuario), es el propio
+# `PROJECT_ROOT` -- mismas rutas que siempre (config.json junto a
+# server.py, repos/ junto al mkdocs.yml fuente). El paquete `.deb` de
+# Linux en cambio instala el codigo bajo `/opt/marc`, propiedad de root --
+# ahi PROJECT_ROOT no admite escritura, asi que todo el estado se mueve
+# junto a `~/.local/share/marc` (XDG data dir), igual que cualquier otra
+# app de escritorio en Linux separa binarios de estado de usuario.
 if _project_root_writable():
     REPOS_DIR = PROJECT_ROOT / "repos"
-    RUNTIME_MKDOCS_CONFIG = PROJECT_ROOT / "_runtime_mkdocs.yml"
+    SITES_DIR = PROJECT_ROOT / "sites"
     CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
     PAGE_INDEX_PATH = Path(__file__).resolve().parent / "page_index.json"
-    MKDOCS_PID_PATH = Path(__file__).resolve().parent / "mkdocs.pid"
 else:
     _STATE_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "marc"
     _STATE_DIR.mkdir(parents=True, exist_ok=True)
     REPOS_DIR = _STATE_DIR / "repos"
-    RUNTIME_MKDOCS_CONFIG = _STATE_DIR / "_runtime_mkdocs.yml"
+    SITES_DIR = _STATE_DIR / "sites"
     CONFIG_PATH = _STATE_DIR / "config.json"
     PAGE_INDEX_PATH = _STATE_DIR / "page_index.json"
-    MKDOCS_PID_PATH = _STATE_DIR / "mkdocs.pid"
 
 REPOS_DIR.mkdir(exist_ok=True)
-MKDOCS_HOST, MKDOCS_PORT = "127.0.0.1", 8765
+SITES_DIR.mkdir(exist_ok=True)
 
 KEYRING_SERVICE = "wiki-desktop-client"
 LEGACY_TOKEN_KEY = "github-pat"  # esquema de un solo repo, pre-multi-repo
@@ -137,22 +128,6 @@ if PAGE_INDEX_PATH.exists():
 # cuando el repo realmente se sincroniza.
 LAST_UPDATE: dict[str, str | None] = {}
 
-# Cliente HTTP compartido para el proxy hacia mkdocs (ver proxy_to_mkdocs),
-# creado una vez en el lifespan. Una pagina de la wiki dispara decenas de
-# requests (assets, search_index.json, etc.); un httpx.AsyncClient() nuevo
-# por request pagaba una conexion TCP nueva cada vez en vez de reusar el
-# pool de conexiones hacia 127.0.0.1.
-HTTPX_CLIENT: httpx.AsyncClient | None = None
-
-# Que repo esta sirviendo mkdocs ahora mismo -- en memoria, nunca en
-# config.json. Separado a proposito de config["active_id"] (el repo que
-# el usuario eligio, persistido): /_docs necesita apuntar mkdocs a la
-# documentacion de uso sin que eso cuente como "el usuario cambio de
-# repo" (ver docs() y ensure_serving()) -- antes /_docs sobreescribia
-# active_id, y el Hub/Admin mostraban el repo real del usuario como
-# "desactivado" mientras leia la ayuda.
-SERVING_REPO_ID: str | None = None
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -160,8 +135,7 @@ async def lifespan(app: FastAPI):
     prototipo web), si ya hay un repo activo de una sesion anterior, se
     hace el pull automatico -- tal como lo pide la spec original, en vez
     de depender de que el usuario le de clic a Resincronizar."""
-    global startup_sync, HTTPX_CLIENT, SERVING_REPO_ID
-    HTTPX_CLIENT = httpx.AsyncClient()
+    global startup_sync
     config = read_config()
     active = get_active_repo(config)
     if active is not None:
@@ -169,22 +143,20 @@ async def lifespan(app: FastAPI):
         dest = REPOS_DIR / active["id"]
         ok, message = run_sync(active["repo_url"], token, dest)
         startup_sync = (ok, message)
-        # Se levanta la wiki aunque el pull automatico falle (ej. sin
-        # internet): sirve el contenido de la ultima sincronizacion buena
-        # que haya en disco, en vez de dejar al usuario sin nada.
+        # Se construye el sitio estatico aunque el pull automatico falle
+        # (ej. sin internet): sirve el contenido de la ultima sincronizacion
+        # buena que haya en disco, en vez de dejar al usuario sin nada.
         if (dest / ".git").exists():
-            set_active_docs_dir(active["id"])
-            ensure_mkdocs_running()
-            SERVING_REPO_ID = active["id"]
+            build_site(active["id"])
             refresh_page_index(active["id"])
 
-    # Los demas repos ya estan clonados en disco -- indexarlos no
-    # necesita red, solo si todavia no se habian indexado nunca.
+    # Los demas repos ya estan clonados en disco -- indexarlos y
+    # construirlos no necesita red, solo si todavia no se habia hecho.
     for repo in config["repos"]:
         if repo["id"] not in PAGE_INDEX:
             refresh_page_index(repo["id"])
+        ensure_site_built(repo["id"])
     yield
-    await HTTPX_CLIENT.aclose()
 
 
 app = FastAPI(title="MARC", lifespan=lifespan)
@@ -266,50 +238,103 @@ def get_active_repo(config: dict) -> dict | None:
     return get_repo(config, config["active_id"])
 
 
-def set_active_docs_dir(repo_id: str | None) -> None:
-    """Genera `_runtime_mkdocs.yml` -- copia de `mkdocs.yml` con
-    `docs_dir` apuntando directo a la ruta absoluta del repo activo.
-    `repo_id=None` borra el archivo generado (sin repo activo).
+def build_site(repo_id: str) -> bool:
+    """Build completo (Markdown a HTML, assets del tema, search_index.json)
+    del repo a `SITES_DIR/<repo_id>/`, via la API de Python de MkDocs --
+    mismo patron de override de `docs_dir`/`site_dir` que ya usaba
+    `build_page_index()`, pero con `mkdocs.commands.build.build()` real en
+    vez de solo leer metadata. `build()` corre `on_config` por su cuenta
+    (no hace falta llamarlo aqui, a diferencia de `build_page_index()`).
 
-    Reemplaza el symlink `synced_docs/` que usaba la version anterior:
-    Windows no crea symlinks estilo Unix sin privilegios especiales
-    (Modo de desarrollador/Administrador), y ademas `Path.is_symlink()`
-    ni siquiera detecta de forma confiable un symlink ya creado en esa
-    plataforma (confirmado corriendo bajo Windows/Wine: lo reporta como
-    carpeta normal) -- se prefiere no depender de symlinks en absoluto,
-    en ninguna plataforma. Mismo patron que ya usaba `build_page_index()`
-    para overridear `docs_dir` via la API de Python, aqui aplicado al
-    `mkdocs serve` que corre como subproceso via `-f/--config-file`.
+    Reemplaza el viejo esquema de `mkdocs serve` + `_runtime_mkdocs.yml` +
+    proxy HTTP: cada repo conectado queda con su sitio ya construido en
+    disco tras cada sync (ver connect()/resync()/lifespan), asi que
+    seleccionar uno u otro (`select()`) pasa a ser instantaneo -- servir
+    archivos estaticos de una carpeta u otra, sin reconstruir nada ni
+    reiniciar ningun proceso. Tambien elimina la necesidad del symlink
+    `synced_docs/` de versiones viejas (Windows no crea symlinks estilo
+    Unix sin privilegios especiales) sin sustituirlo por otro mecanismo
+    fragil: aqui no hay ruta compartida "activa" que reapuntar, cada repo
+    tiene su propia carpeta de salida fija."""
+    dest = REPOS_DIR / repo_id
+    if not (dest / ".git").exists():
+        return False
+    try:
+        config = mkdocs_load_config(
+            str(PROJECT_ROOT / "mkdocs.yml"), docs_dir=str(dest), site_dir=str(SITES_DIR / repo_id)
+        )
+        mkdocs_build(config)
+    except Exception:
+        return False
+    return True
 
-    `custom_dir` (tema) y cada entrada de `hooks:` tambien son rutas
-    relativas en `mkdocs.yml`, pero MkDocs las resuelve relativas a la
-    carpeta del propio archivo de config, no a `PROJECT_ROOT` -- mientras
-    `_runtime_mkdocs.yml` vivia siempre junto a `mkdocs.yml` (dentro de
-    `PROJECT_ROOT`) esto pasaba desapercibido. Con el paquete `.deb` de
-    Linux, `_runtime_mkdocs.yml` puede vivir en `STATE_DIR` (ver arriba,
-    `/opt/marc` de solo lectura), separado de `theme_overrides/` y
-    `hooks/`, que solo existen en `PROJECT_ROOT` -- sin este ajuste,
-    `mkdocs serve` aborta con un error de configuracion antes de escuchar
-    en `MKDOCS_PORT`, y el proxy nunca ve otra cosa que un connection
-    refused (confirmado reproduciendo el paquete: `mkdocs serve` moria en
-    el arranque, `/wiki` devolvia 503 con "La wiki no esta disponible")."""
-    if repo_id is None:
-        RUNTIME_MKDOCS_CONFIG.unlink(missing_ok=True)
-        return
-    base = (PROJECT_ROOT / "mkdocs.yml").read_text(encoding="utf-8")
-    dest = (REPOS_DIR / repo_id).resolve()
-    updated = re.sub(r"(?m)^docs_dir:.*$", f"docs_dir: {dest.as_posix()}", base)
-    updated = re.sub(
-        r"(?m)^(\s*custom_dir:\s*)theme_overrides\s*$",
-        lambda m: f"{m.group(1)}{(PROJECT_ROOT / 'theme_overrides').as_posix()}",
-        updated,
-    )
-    updated = re.sub(
-        r"(?m)^(\s*-\s*)hooks/([a-zA-Z0-9_]+\.py)\s*$",
-        lambda m: f"{m.group(1)}{(PROJECT_ROOT / 'hooks' / m.group(2)).as_posix()}",
-        updated,
-    )
-    RUNTIME_MKDOCS_CONFIG.write_text(updated, encoding="utf-8")
+
+def ensure_site_built(repo_id: str) -> None:
+    """Construye el sitio de `repo_id` solo si todavia no existe -- para
+    los repos clonados que no son el activo (ver lifespan) o como red de
+    seguridad si `serve_site()` encuentra la carpeta vacia (instalacion
+    migrada desde antes de este esquema, o build anterior fallido)."""
+    if not (SITES_DIR / repo_id / "index.html").exists():
+        build_site(repo_id)
+
+
+def _resolve_site_file(repo_id: str, path: str) -> tuple[Path, bool] | None:
+    """Resuelve `path` dentro de `SITES_DIR/<repo_id>/`, sin permitir
+    escapar ese directorio (path traversal via `..`). Devuelve
+    `(archivo, es_index_de_directorio)` -- el segundo valor le dice a
+    `serve_site()` si hace falta redirigir agregando la barra final antes
+    de servir ese `index.html` (ver ahi el motivo)."""
+    base = (SITES_DIR / repo_id).resolve()
+    if not base.is_dir():
+        return None
+    candidate = (base / path).resolve()
+    if candidate != base and base not in candidate.parents:
+        return None
+    if candidate.is_dir():
+        return candidate / "index.html", True
+    return candidate, False
+
+
+def serve_site(repo_id: str, path: str, url_prefix: str):
+    """Sirve `path` desde el sitio ya construido de `repo_id`, bajo el
+    prefijo de URL `url_prefix` (`wiki` o `_docs`). Reemplaza
+    `proxy_to_mkdocs()`: ya no hay proceso vivo al que reenviar la
+    request, `FileResponse` lee el archivo directo de disco (con soporte
+    nativo de ETag/Range/tipo MIME por extension).
+
+    Si `path` (no vacio) cae en un directorio pero la URL no traia la
+    barra final (ej. `/wiki/00-indice` en vez de `/wiki/00-indice/`),
+    redirige agregandola en vez de servir el `index.html` directo en esa
+    URL -- los links relativos de la pagina (assets, otras paginas) se
+    resuelven contra la URL actual del navegador, y sin la barra final
+    resuelven un nivel arriba de lo que deberian (`/wiki/00-indice` +
+    `assets/x.css` -> `/wiki/assets/x.css` en vez de
+    `/wiki/00-indice/assets/x.css`). Los servidores estaticos normales
+    (Apache, Nginx, y el `mkdocs serve` que este esquema reemplaza) hacen
+    esta misma redirección al servir un directorio; sin ella, la wiki
+    cargaba pero cada asset/link relativo apuntaba mal en cuanto se
+    entraba a una pagina sin escribir la barra final a mano (confirmado
+    navegando con Playwright, no se veia con `curl` porque curl no sigue
+    el `<meta refresh>` ni resuelve URLs relativas). `path == ""`
+    (la raiz, `/wiki/` o `/_docs/`) nunca redirige aqui -- quien registra
+    la ruta bare sin barra (`wiki_index()`) ya redirige por su cuenta
+    antes de llegar a esta funcion; tratarla igual aqui causaria un loop
+    de redirects (`path=""` no distingue por si solo si la URL original
+    ya traia o no la barra)."""
+    ensure_site_built(repo_id)
+    resolved = _resolve_site_file(repo_id, path)
+    if resolved is None:
+        return HTMLResponse("<p>Página no encontrada.</p>", status_code=404)
+    file_path, is_dir_index = resolved
+    if is_dir_index and path != "" and not path.endswith("/"):
+        target = f"/{url_prefix}/{path}".rstrip("/") + "/"
+        return RedirectResponse(target, status_code=308)
+    if not file_path.is_file():
+        not_found = SITES_DIR / repo_id / "404.html"
+        if not_found.is_file():
+            return FileResponse(not_found, status_code=404)
+        return HTMLResponse("<p>Página no encontrada.</p>", status_code=404)
+    return FileResponse(file_path)
 
 
 def repo_display_name(repo_url: str) -> str:
@@ -454,103 +479,6 @@ def run_sync(repo_url: str, token: str | None, dest: Path) -> tuple[bool, str]:
         return False, str(e) or "Error desconocido al sincronizar."
 
 
-def mkdocs_is_running() -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.3)
-        return s.connect_ex((MKDOCS_HOST, MKDOCS_PORT)) == 0
-
-
-def kill_mkdocs() -> None:
-    """Mata el mkdocs serve que lanzamos nosotros (via pidfile propio).
-
-    Necesario porque `mkdocs serve --no-livereload` no activa ningun
-    watcher de archivos (confirmado en el codigo fuente de
-    mkdocs.commands.serve): un cambio de repo activo (nuevo
-    `_runtime_mkdocs.yml`, ver `set_active_docs_dir()`) o un pull en
-    caliente nunca se reflejan mientras el proceso siga vivo. La unica
-    forma confiable de servir contenido nuevo es reiniciar el proceso,
-    no reusar uno que ya estaba corriendo.
-    """
-    if not MKDOCS_PID_PATH.exists():
-        return
-    try:
-        pid = int(MKDOCS_PID_PATH.read_text(encoding="utf-8").strip())
-        os.kill(pid, signal.SIGTERM)
-        for _ in range(40):
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.1)
-    except (ValueError, ProcessLookupError, PermissionError):
-        pass
-    finally:
-        MKDOCS_PID_PATH.unlink(missing_ok=True)
-
-
-def spawn_mkdocs() -> None:
-    # --no-livereload: sin esto, mkdocs inyecta un script que abre un
-    # websocket propio hacia su origen (MKDOCS_HOST:MKDOCS_PORT). Como
-    # el unico puerto que el usuario ve es el de FastAPI (que hace de
-    # proxy), ese websocket tendria que proxiarse tambien. Se desactiva
-    # porque el contenido no cambia por edicion local en vivo, sino por
-    # /resync o un cambio de repo activo, que ya reinician el proceso.
-    proc = subprocess.Popen(
-        [
-            sys.executable, "-m", "mkdocs", "serve",
-            "-f", str(RUNTIME_MKDOCS_CONFIG),
-            "-a", f"{MKDOCS_HOST}:{MKDOCS_PORT}",
-            "--no-livereload",
-        ],
-        cwd=PROJECT_ROOT,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    MKDOCS_PID_PATH.write_text(str(proc.pid), encoding="utf-8")
-    for _ in range(60):
-        if mkdocs_is_running():
-            return
-        time.sleep(0.1)
-
-
-def ensure_mkdocs_running() -> None:
-    """Arranca mkdocs solo si no hay nada escuchando en el puerto -- red de
-    seguridad para las rutas de /wiki en caso de que el proceso muriera
-    entre requests. No sirve para recoger contenido nuevo: `mkdocs serve
-    --no-livereload` no activa ningun watcher de archivos (confirmado en
-    el codigo fuente de mkdocs.commands.serve, el watch solo se registra
-    si `livereload=True`), asi que un pull en caliente sobre el repo
-    activo nunca se refleja mientras el proceso siga vivo. Para eso hace
-    falta restart_mkdocs() (ver resync())."""
-    if not mkdocs_is_running():
-        spawn_mkdocs()
-
-
-def restart_mkdocs() -> None:
-    """Reinicia mkdocs siempre. Se usa cuando el repo activo cambia
-    (conectar uno nuevo o seleccionar otro ya conectado), porque
-    `_runtime_mkdocs.yml` paso a apuntar a un directorio distinto."""
-    kill_mkdocs()
-    spawn_mkdocs()
-
-
-def ensure_serving(repo_id: str) -> None:
-    """Asegura que mkdocs este sirviendo `repo_id` antes de proxiar una
-    request de /wiki. Puede haber quedado sirviendo la documentacion de
-    uso (ver docs()): SERVING_REPO_ID != repo_id detecta ese desfase y
-    reencamina mkdocs solo, sin que el usuario tenga que volver a
-    seleccionar su repo a mano. Si ya coincide, ensure_mkdocs_running()
-    solo cubre el caso de que el proceso haya muerto entre requests."""
-    global SERVING_REPO_ID
-    if SERVING_REPO_ID != repo_id:
-        set_active_docs_dir(repo_id)
-        restart_mkdocs()
-        SERVING_REPO_ID = repo_id
-    else:
-        ensure_mkdocs_running()
-
-
 def render_admin(
     request: Request,
     config: dict,
@@ -595,7 +523,6 @@ def admin(request: Request):
 
 @app.post("/connect", response_class=HTMLResponse)
 def connect(request: Request, repo_url: str = Form(...), token: str = Form("")):
-    global SERVING_REPO_ID
     repo_url = repo_url.strip()
     token = token.strip() or None
     config = read_config()
@@ -629,42 +556,29 @@ def connect(request: Request, repo_url: str = Form(...), token: str = Form("")):
     config["active_id"] = repo_id
     write_config(config)
 
-    set_active_docs_dir(repo_id)
-    restart_mkdocs()
-    SERVING_REPO_ID = repo_id
+    build_site(repo_id)
     refresh_page_index(repo_id)
     # A "/_admin", no a "/": el usuario necesita ver el resultado del
-    # sync antes de que "/" empiece a servirle la wiki via proxy.
+    # sync antes de que "/" empiece a servirle la wiki.
     return RedirectResponse("/_admin", status_code=303)
 
 
 @app.post("/select/{repo_id}")
 def select(repo_id: str):
-    global SERVING_REPO_ID
     config = read_config()
     if get_repo(config, repo_id) is None:
         return RedirectResponse("/_admin", status_code=303)
-    # Si el repo ya era el activo Y mkdocs ya lo esta sirviendo, reiniciar
-    # solo hace esperar el rebuild completo (varios segundos) para
-    # terminar sirviendo exactamente lo mismo. was_active ya no basta solo
-    # (ver SERVING_REPO_ID): tras visitar /_docs, config["active_id"]
-    # sigue apuntando aqui pero mkdocs esta sirviendo la documentacion de
-    # uso -- en ese caso si hace falta reiniciar aunque "ya era el activo".
-    already_serving = config["active_id"] == repo_id and SERVING_REPO_ID == repo_id
+    # Sin restart ni rebuild que esperar: el sitio de este repo ya quedo
+    # construido en su ultimo sync (ver connect()/resync()/lifespan), asi
+    # que cambiar de repo activo es solo actualizar que carpeta de
+    # SITES_DIR sirve /wiki en la siguiente request (ver serve_site()).
     config["active_id"] = repo_id
     write_config(config)
-    set_active_docs_dir(repo_id)
-    if already_serving:
-        ensure_mkdocs_running()
-    else:
-        restart_mkdocs()
-    SERVING_REPO_ID = repo_id
     return RedirectResponse("/wiki", status_code=303)
 
 
 @app.post("/resync", response_class=HTMLResponse)
 def resync(request: Request):
-    global SERVING_REPO_ID
     config = read_config()
     active = get_active_repo(config)
     if active is None:
@@ -672,26 +586,19 @@ def resync(request: Request):
     token = keyring.get_password(KEYRING_SERVICE, token_key(active["id"]))
     ok, message = run_sync(active["repo_url"], token, REPOS_DIR / active["id"])
     if ok:
-        # restart_mkdocs(), no ensure_mkdocs_running(): sin esto el pull
-        # se traia a disco pero nunca se veia reflejado en la wiki servida
-        # (ver docstring de ensure_mkdocs_running).
-        set_active_docs_dir(active["id"])
-        restart_mkdocs()
-        SERVING_REPO_ID = active["id"]
+        build_site(active["id"])
         refresh_page_index(active["id"])
     return render_admin(request, config, sync_message=message, sync_ok=ok)
 
 
 @app.post("/disconnect/{repo_id}")
 def disconnect(repo_id: str):
-    global SERVING_REPO_ID
     config = read_config()
     if get_repo(config, repo_id) is None:
         return RedirectResponse("/_admin", status_code=303)
 
     config["repos"] = [r for r in config["repos"] if r["id"] != repo_id]
-    was_active = config["active_id"] == repo_id
-    if was_active:
+    if config["active_id"] == repo_id:
         config["active_id"] = None
     write_config(config)
 
@@ -701,47 +608,15 @@ def disconnect(repo_id: str):
         pass
     # Se borra para que una futura reconexion a esta URL parta de un
     # `clone` limpio -- un `pull` contra un remoto distinto fallaria
-    # (historias no relacionadas).
+    # (historias no relacionadas). El sitio construido se borra junto con
+    # el clon -- sin el clon no hay como reconstruirlo si algo lo pidiera.
     shutil.rmtree(REPOS_DIR / repo_id, ignore_errors=True)
+    shutil.rmtree(SITES_DIR / repo_id, ignore_errors=True)
 
     PAGE_INDEX.pop(repo_id, None)
     PAGE_INDEX_PATH.write_text(json.dumps(PAGE_INDEX, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    if was_active:
-        set_active_docs_dir(None)
-        kill_mkdocs()
-        SERVING_REPO_ID = None
-
     return RedirectResponse("/_admin", status_code=303)
-
-
-_HOP_BY_HOP_HEADERS = {"connection", "keep-alive", "transfer-encoding", "content-encoding", "content-length"}
-
-
-async def proxy_to_mkdocs(request: Request, path: str) -> Response:
-    """Reenvia la request a `mkdocs serve` (interno, 127.0.0.1 only) y
-    devuelve su respuesta tal cual. Este es el mecanismo que permite que
-    la wiki se vea en el mismo puerto que el panel de administracion."""
-    upstream_url = httpx.URL(
-        f"http://{MKDOCS_HOST}:{MKDOCS_PORT}/{path}", params=request.query_params
-    )
-    headers = {k: v for k, v in request.headers.items() if k.lower() not in {"host", *_HOP_BY_HOP_HEADERS}}
-    try:
-        upstream = await HTTPX_CLIENT.request(
-            request.method,
-            upstream_url,
-            headers=headers,
-            content=await request.body(),
-            timeout=10,
-        )
-    except httpx.ConnectError:
-            return HTMLResponse(
-                "<p>La wiki no esta disponible en este momento. "
-                '<a href="/_admin">Ir a administracion</a> para revisar la conexion.</p>',
-                status_code=503,
-            )
-    response_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP_HEADERS}
-    return Response(content=upstream.content, status_code=upstream.status_code, headers=response_headers)
 
 
 _BADGE_COUNT = 6
@@ -793,10 +668,11 @@ _docs_synced = False
 
 @app.get("/_docs")
 def docs():
-    """Documentacion de uso de la app: la sincroniza y manda directo a
-    /wiki. Sin DOCS_REPO_URL todavia, cae a /_admin -- no hay nada que
-    mostrar. (No es "/docs": FastAPI ya usa esa ruta para su propio
-    Swagger UI.)
+    """Documentacion de uso de la app: la sincroniza y manda a /_docs/,
+    su propio sitio estatico independiente del repo activo del usuario
+    (ver docs_content()). Sin DOCS_REPO_URL todavia, cae a /_admin -- no
+    hay nada que mostrar. (No es "/docs": FastAPI ya usa esa ruta para su
+    propio Swagger UI.)
 
     A proposito NUNCA se agrega a config["repos"]: es un recurso fijo de
     la app, mantenido por quien la desarrolla, no un repo que el usuario
@@ -804,17 +680,15 @@ def docs():
     tarjeta en el Hub (como si el usuario lo hubiera agregado) y como fila
     "Quitar"-able en el panel de Repositorios -- pudiendo incluso borrarlo
     por accidente. get_active_repo() sabe reconocerlo igual como activo
-    sin que viva en esa lista.
+    sin que viva en esa lista (queda como red de seguridad para instalaciones
+    que ya tuvieran ese estado guardado desde antes de este esquema).
 
-    Por el mismo motivo, ver docs de uso NUNCA toca config["active_id"]:
-    solo redirige mkdocs (en memoria, via SERVING_REPO_ID) a servir este
-    repo. Antes si lo tocaba y lo persistia en disco -- el repo real del
-    usuario aparecia como "desactivado" en Hub/Admin mientras leia la
-    ayuda, y volver a el pagaba un rebuild completo de mas. ensure_serving()
-    (usada por /wiki) detecta el desfase entre SERVING_REPO_ID y el repo
-    activo de verdad y reencamina mkdocs sola, sin que el usuario tenga
-    que volver a seleccionar su repo a mano."""
-    global _docs_synced, SERVING_REPO_ID
+    Por el mismo motivo, ver la doc de uso NUNCA toca config["active_id"]:
+    tiene su propio sitio construido y su propio prefijo de URL (/_docs/),
+    asi que no hace falta tocar que repo esta "activo" para el usuario --
+    a diferencia del viejo esquema de un solo `mkdocs serve` compartido,
+    donde mostrar la doc de uso exigia repuntar el unico proceso vivo."""
+    global _docs_synced
     if not DOCS_REPO_URL:
         return RedirectResponse("/_admin", status_code=303)
 
@@ -833,33 +707,38 @@ def docs():
         # Nunca se pudo clonar (ni antes ni ahora) -- no hay nada que servir.
         return RedirectResponse("/_admin", status_code=303)
 
-    if SERVING_REPO_ID != repo_id:
-        set_active_docs_dir(repo_id)
-        restart_mkdocs()
-        SERVING_REPO_ID = repo_id
-
-    return RedirectResponse("/wiki", status_code=303)
+    build_site(repo_id)
+    return RedirectResponse("/_docs/", status_code=303)
 
 
-@app.api_route("/wiki", methods=["GET", "POST", "HEAD"])
-async def wiki_index(request: Request):
-    active = get_active_repo(read_config())
-    if active is None:
+@app.get("/_docs/{path:path}")
+async def docs_content(path: str):
+    """Sirve el sitio ya construido de la documentacion de uso, con su
+    propio prefijo -- independiente de cual repo tenga activo el usuario
+    (ver docs())."""
+    if not DOCS_REPO_URL:
+        return RedirectResponse("/_admin", status_code=303)
+    return serve_site(repo_id_for(DOCS_REPO_URL), path, "_docs")
+
+
+@app.get("/wiki")
+def wiki_index():
+    # Redirige a /wiki/ (con barra) siempre: sin ella, los links
+    # relativos de la primera pagina (assets, otras paginas) resuelven un
+    # nivel arriba de lo que deberian -- ver el docstring de serve_site().
+    # Si no hay repo activo, / mismo lo explica mejor que un 404 aqui.
+    if get_active_repo(read_config()) is None:
         return RedirectResponse("/", status_code=303)
-    ensure_serving(active["id"])
-    return await proxy_to_mkdocs(request, "wiki")
+    return RedirectResponse("/wiki/", status_code=308)
 
 
-@app.api_route("/wiki/{path:path}", methods=["GET", "POST", "HEAD"])
-async def wiki_proxy(request: Request, path: str):
+@app.get("/wiki/{path:path}")
+async def wiki_proxy(path: str):
     """Todo el contenido de la wiki (paginas, assets, search_index.json)
-    vive bajo /wiki/ -- un prefijo fijo, no por repo, porque solo un
-    repo esta activo a la vez (ver set_active_docs_dir). `mkdocs serve`
-    ya sirve su contenido bajo ese mismo prefijo internamente (efecto de
-    `site_url: http://.../wiki/` en mkdocs.yml), asi que se reenvia la
-    ruta completa tal cual -- no hay que reescribir nada."""
+    vive bajo /wiki/ -- un prefijo fijo, no por repo, porque solo un repo
+    del usuario esta activo a la vez. Sirve directo del sitio ya
+    construido de ese repo en SITES_DIR (ver serve_site())."""
     active = get_active_repo(read_config())
     if active is None:
         return RedirectResponse("/", status_code=303)
-    ensure_serving(active["id"])
-    return await proxy_to_mkdocs(request, f"wiki/{path}")
+    return serve_site(active["id"], path, "wiki")
