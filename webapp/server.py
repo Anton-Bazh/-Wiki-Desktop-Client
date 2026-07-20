@@ -137,6 +137,22 @@ if PAGE_INDEX_PATH.exists():
 # cuando el repo realmente se sincroniza.
 LAST_UPDATE: dict[str, str | None] = {}
 
+# Cliente HTTP compartido para el proxy hacia mkdocs (ver proxy_to_mkdocs),
+# creado una vez en el lifespan. Una pagina de la wiki dispara decenas de
+# requests (assets, search_index.json, etc.); un httpx.AsyncClient() nuevo
+# por request pagaba una conexion TCP nueva cada vez en vez de reusar el
+# pool de conexiones hacia 127.0.0.1.
+HTTPX_CLIENT: httpx.AsyncClient | None = None
+
+# Que repo esta sirviendo mkdocs ahora mismo -- en memoria, nunca en
+# config.json. Separado a proposito de config["active_id"] (el repo que
+# el usuario eligio, persistido): /_docs necesita apuntar mkdocs a la
+# documentacion de uso sin que eso cuente como "el usuario cambio de
+# repo" (ver docs() y ensure_serving()) -- antes /_docs sobreescribia
+# active_id, y el Hub/Admin mostraban el repo real del usuario como
+# "desactivado" mientras leia la ayuda.
+SERVING_REPO_ID: str | None = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -144,7 +160,8 @@ async def lifespan(app: FastAPI):
     prototipo web), si ya hay un repo activo de una sesion anterior, se
     hace el pull automatico -- tal como lo pide la spec original, en vez
     de depender de que el usuario le de clic a Resincronizar."""
-    global startup_sync
+    global startup_sync, HTTPX_CLIENT, SERVING_REPO_ID
+    HTTPX_CLIENT = httpx.AsyncClient()
     config = read_config()
     active = get_active_repo(config)
     if active is not None:
@@ -158,6 +175,7 @@ async def lifespan(app: FastAPI):
         if (dest / ".git").exists():
             set_active_docs_dir(active["id"])
             ensure_mkdocs_running()
+            SERVING_REPO_ID = active["id"]
             refresh_page_index(active["id"])
 
     # Los demas repos ya estan clonados en disco -- indexarlos no
@@ -166,6 +184,7 @@ async def lifespan(app: FastAPI):
         if repo["id"] not in PAGE_INDEX:
             refresh_page_index(repo["id"])
     yield
+    await HTTPX_CLIENT.aclose()
 
 
 app = FastAPI(title="MARC", lifespan=lifespan)
@@ -516,6 +535,22 @@ def restart_mkdocs() -> None:
     spawn_mkdocs()
 
 
+def ensure_serving(repo_id: str) -> None:
+    """Asegura que mkdocs este sirviendo `repo_id` antes de proxiar una
+    request de /wiki. Puede haber quedado sirviendo la documentacion de
+    uso (ver docs()): SERVING_REPO_ID != repo_id detecta ese desfase y
+    reencamina mkdocs solo, sin que el usuario tenga que volver a
+    seleccionar su repo a mano. Si ya coincide, ensure_mkdocs_running()
+    solo cubre el caso de que el proceso haya muerto entre requests."""
+    global SERVING_REPO_ID
+    if SERVING_REPO_ID != repo_id:
+        set_active_docs_dir(repo_id)
+        restart_mkdocs()
+        SERVING_REPO_ID = repo_id
+    else:
+        ensure_mkdocs_running()
+
+
 def render_admin(
     request: Request,
     config: dict,
@@ -560,6 +595,7 @@ def admin(request: Request):
 
 @app.post("/connect", response_class=HTMLResponse)
 def connect(request: Request, repo_url: str = Form(...), token: str = Form("")):
+    global SERVING_REPO_ID
     repo_url = repo_url.strip()
     token = token.strip() or None
     config = read_config()
@@ -595,6 +631,7 @@ def connect(request: Request, repo_url: str = Form(...), token: str = Form("")):
 
     set_active_docs_dir(repo_id)
     restart_mkdocs()
+    SERVING_REPO_ID = repo_id
     refresh_page_index(repo_id)
     # A "/_admin", no a "/": el usuario necesita ver el resultado del
     # sync antes de que "/" empiece a servirle la wiki via proxy.
@@ -603,27 +640,31 @@ def connect(request: Request, repo_url: str = Form(...), token: str = Form("")):
 
 @app.post("/select/{repo_id}")
 def select(repo_id: str):
+    global SERVING_REPO_ID
     config = read_config()
     if get_repo(config, repo_id) is None:
         return RedirectResponse("/_admin", status_code=303)
-    # Si el repo ya era el activo, el mkdocs que corre ya sirve ese
-    # contenido: reiniciarlo solo hace esperar el rebuild completo
-    # (varios segundos) para terminar sirviendo exactamente lo mismo.
-    # Era la causa de que abrir desde el Hub la wiki ya activa tardara
-    # tanto como cambiar de repo.
-    was_active = config["active_id"] == repo_id
+    # Si el repo ya era el activo Y mkdocs ya lo esta sirviendo, reiniciar
+    # solo hace esperar el rebuild completo (varios segundos) para
+    # terminar sirviendo exactamente lo mismo. was_active ya no basta solo
+    # (ver SERVING_REPO_ID): tras visitar /_docs, config["active_id"]
+    # sigue apuntando aqui pero mkdocs esta sirviendo la documentacion de
+    # uso -- en ese caso si hace falta reiniciar aunque "ya era el activo".
+    already_serving = config["active_id"] == repo_id and SERVING_REPO_ID == repo_id
     config["active_id"] = repo_id
     write_config(config)
     set_active_docs_dir(repo_id)
-    if was_active:
+    if already_serving:
         ensure_mkdocs_running()
     else:
         restart_mkdocs()
+    SERVING_REPO_ID = repo_id
     return RedirectResponse("/wiki", status_code=303)
 
 
 @app.post("/resync", response_class=HTMLResponse)
 def resync(request: Request):
+    global SERVING_REPO_ID
     config = read_config()
     active = get_active_repo(config)
     if active is None:
@@ -634,13 +675,16 @@ def resync(request: Request):
         # restart_mkdocs(), no ensure_mkdocs_running(): sin esto el pull
         # se traia a disco pero nunca se veia reflejado en la wiki servida
         # (ver docstring de ensure_mkdocs_running).
+        set_active_docs_dir(active["id"])
         restart_mkdocs()
+        SERVING_REPO_ID = active["id"]
         refresh_page_index(active["id"])
     return render_admin(request, config, sync_message=message, sync_ok=ok)
 
 
 @app.post("/disconnect/{repo_id}")
 def disconnect(repo_id: str):
+    global SERVING_REPO_ID
     config = read_config()
     if get_repo(config, repo_id) is None:
         return RedirectResponse("/_admin", status_code=303)
@@ -666,6 +710,7 @@ def disconnect(repo_id: str):
     if was_active:
         set_active_docs_dir(None)
         kill_mkdocs()
+        SERVING_REPO_ID = None
 
     return RedirectResponse("/_admin", status_code=303)
 
@@ -681,16 +726,15 @@ async def proxy_to_mkdocs(request: Request, path: str) -> Response:
         f"http://{MKDOCS_HOST}:{MKDOCS_PORT}/{path}", params=request.query_params
     )
     headers = {k: v for k, v in request.headers.items() if k.lower() not in {"host", *_HOP_BY_HOP_HEADERS}}
-    async with httpx.AsyncClient() as client:
-        try:
-            upstream = await client.request(
-                request.method,
-                upstream_url,
-                headers=headers,
-                content=await request.body(),
-                timeout=10,
-            )
-        except httpx.ConnectError:
+    try:
+        upstream = await HTTPX_CLIENT.request(
+            request.method,
+            upstream_url,
+            headers=headers,
+            content=await request.body(),
+            timeout=10,
+        )
+    except httpx.ConnectError:
             return HTMLResponse(
                 "<p>La wiki no esta disponible en este momento. "
                 '<a href="/_admin">Ir a administracion</a> para revisar la conexion.</p>',
@@ -760,8 +804,17 @@ def docs():
     tarjeta en el Hub (como si el usuario lo hubiera agregado) y como fila
     "Quitar"-able en el panel de Repositorios -- pudiendo incluso borrarlo
     por accidente. get_active_repo() sabe reconocerlo igual como activo
-    sin que viva en esa lista."""
-    global _docs_synced
+    sin que viva en esa lista.
+
+    Por el mismo motivo, ver docs de uso NUNCA toca config["active_id"]:
+    solo redirige mkdocs (en memoria, via SERVING_REPO_ID) a servir este
+    repo. Antes si lo tocaba y lo persistia en disco -- el repo real del
+    usuario aparecia como "desactivado" en Hub/Admin mientras leia la
+    ayuda, y volver a el pagaba un rebuild completo de mas. ensure_serving()
+    (usada por /wiki) detecta el desfase entre SERVING_REPO_ID y el repo
+    activo de verdad y reencamina mkdocs sola, sin que el usuario tenga
+    que volver a seleccionar su repo a mano."""
+    global _docs_synced, SERVING_REPO_ID
     if not DOCS_REPO_URL:
         return RedirectResponse("/_admin", status_code=303)
 
@@ -780,24 +833,20 @@ def docs():
         # Nunca se pudo clonar (ni antes ni ahora) -- no hay nada que servir.
         return RedirectResponse("/_admin", status_code=303)
 
-    config = read_config()
-    if config["active_id"] != repo_id:
-        config["active_id"] = repo_id
-        # write_config antes de restart_mkdocs: expose_active_repo.py lee
-        # config.json del disco al reiniciar, si se escribe despues el
-        # nombre del repo en la ruta (breadcrumb) queda un ciclo atrasado.
-        write_config(config)
+    if SERVING_REPO_ID != repo_id:
         set_active_docs_dir(repo_id)
         restart_mkdocs()
+        SERVING_REPO_ID = repo_id
 
     return RedirectResponse("/wiki", status_code=303)
 
 
 @app.api_route("/wiki", methods=["GET", "POST", "HEAD"])
 async def wiki_index(request: Request):
-    if get_active_repo(read_config()) is None:
+    active = get_active_repo(read_config())
+    if active is None:
         return RedirectResponse("/", status_code=303)
-    ensure_mkdocs_running()
+    ensure_serving(active["id"])
     return await proxy_to_mkdocs(request, "wiki")
 
 
@@ -809,7 +858,8 @@ async def wiki_proxy(request: Request, path: str):
     ya sirve su contenido bajo ese mismo prefijo internamente (efecto de
     `site_url: http://.../wiki/` en mkdocs.yml), asi que se reenvia la
     ruta completa tal cual -- no hay que reescribir nada."""
-    if get_active_repo(read_config()) is None:
+    active = get_active_repo(read_config())
+    if active is None:
         return RedirectResponse("/", status_code=303)
-    ensure_mkdocs_running()
+    ensure_serving(active["id"])
     return await proxy_to_mkdocs(request, f"wiki/{path}")

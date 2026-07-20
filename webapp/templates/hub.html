@@ -106,5 +106,9 @@
   @media (max-width: 720px) {
     .content::before { left: 0; }
   }
+  /* Con la barra lateral oculta (boton de menu) el offset de 250px ya no
+     tiene que compensar nada -- sin esto la marca de agua quedaba
+     descentrada respecto al contenido, que si ocupa el ancho completo. */
+  #sidebar-toggle:checked ~ .shell .content::before { left: 0; }
 </style>
 {% endblock %}
