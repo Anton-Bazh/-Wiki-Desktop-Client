@@ -105,7 +105,7 @@ APP_VERSION = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 # un equipo) -- distinto de los repos que el usuario conecta. Vacio
 # hasta que el repo exista; el boton del hub cae a /_admin mientras
 # tanto. Cuando exista, poner aqui su URL publica de GitHub.
-DOCS_REPO_URL: str | None = "https://github.com/Anton-Bazh/Wiki-Desktop-Client-doc.git"
+DOCS_REPO_URL: str | None = "https://github.com/Anton-Bazh/MARC-DOC.git"
 
 # Resultado del sync automatico de arranque (None si no habia repo
 # activo configurado todavia). Se muestra una vez en /_admin para que
@@ -259,9 +259,26 @@ def build_site(repo_id: str) -> bool:
     dest = REPOS_DIR / repo_id
     if not (dest / ".git").exists():
         return False
+    # El nombre del breadcrumb (config.extra["active_repo_name"], ver
+    # hooks/expose_active_repo.py) debe ser el de ESTE repo, no el del
+    # repo activo global -- distinto en dos casos reales: (1) aqui se
+    # pre-construyen sitios de repos que todavia no son el activo (ver
+    # lifespan/ensure_site_built), y (2) el repo fijo de documentacion de
+    # uso (DOCS_REPO_URL) nunca es "activo" por diseno (ver docs()). Sin
+    # esto, ambos casos heredaban el nombre del repo activo de
+    # config.json, ajeno al contenido que en realidad se esta sirviendo.
+    if DOCS_REPO_URL and repo_id == repo_id_for(DOCS_REPO_URL):
+        repo_url = DOCS_REPO_URL
+    else:
+        repo = get_repo(read_config(), repo_id)
+        repo_url = repo["repo_url"] if repo else None
+    display_name = repo_display_name(repo_url) if repo_url else "wiki"
     try:
         config = mkdocs_load_config(
-            str(PROJECT_ROOT / "mkdocs.yml"), docs_dir=str(dest), site_dir=str(SITES_DIR / repo_id)
+            str(PROJECT_ROOT / "mkdocs.yml"),
+            docs_dir=str(dest),
+            site_dir=str(SITES_DIR / repo_id),
+            extra={"active_repo_name": display_name},
         )
         mkdocs_build(config)
     except Exception:
