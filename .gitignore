@@ -15,3 +15,7 @@ dist/
 webapp/config.json
 webapp/page_index.json
 webapp/__pycache__/
+# node_modules de frontend/ (herramienta de dev -- ver frontend/README.md):
+# se reinstala con npm install, no se versiona. El .js ya compilado en
+# vendor/ si se versiona, ese es el que la app realmente usa.
+frontend/node_modules/

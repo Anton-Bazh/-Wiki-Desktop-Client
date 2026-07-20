@@ -38,21 +38,40 @@ theme:
     - search.highlight
     - content.code.copy
 
-# mermaid.min.js vendorizado en vendor/ (copiado al build por
-# hooks/copy_vendor.py): mkdocs-material solo baja Mermaid de unpkg.com
-# si "window.mermaid" todavia no existe (confirmado en su bundle.js), asi
-# que declararlo aqui hace que use esta copia local y nunca llame al CDN.
+# mermaid.min.js, chart.min.js y katex/ vendorizados en vendor/ (copiados
+# al build por hooks/copy_vendor.py) -- mismo motivo para las tres: nunca
+# depender de un CDN, la wiki debe funcionar offline una vez sincronizada.
+# marc-interactive.js es codigo propio (fuente TypeScript en frontend/,
+# ver frontend/README.md) -- monta/limpia las graficas de los bloques
+# ```chart y renderiza las formulas de pymdownx.arithmatex en cada
+# navegacion, ver su docstring para el porque.
 extra_javascript:
   - vendor/mermaid.min.js
+  - vendor/chart.min.js
+  - vendor/katex/katex.min.js
+  - vendor/marc-interactive.js
 
 # extra.css vive en theme_overrides/ (el custom_dir) -- MkDocs copia sus
 # archivos junto con los del tema base automaticamente, sin necesitar un
 # hook propio como el de branding/vendor (que viven fuera de custom_dir).
+# katex.min.css si necesita el hook (vive en vendor/, no en custom_dir).
 extra_css:
   - extra.css
+  - vendor/katex/katex.min.css
 
 markdown_extensions:
   - admonition
+  # generic: true -- salida neutra (<span>/<div class="arithmatex">), no
+  # atada a MathJax; marc-interactive.js la renderiza con KaTeX. Los wraps
+  # en blanco dejan el LaTeX puro dentro de la burbuja (sin \(...\)/\[...\]
+  # de por medio) -- menos que parsear en el navegador, ver
+  # frontend/src/marc-interactive.ts. smart_dollar (default) evita que un
+  # precio como "$5" se interprete como formula: exige que el $ de
+  # apertura no tenga espacio pegado despues, ni el de cierre antes.
+  - pymdownx.arithmatex:
+      generic: true
+      tex_inline_wrap: ["", ""]
+      tex_block_wrap: ["", ""]
   - pymdownx.details
   - pymdownx.highlight
   - pymdownx.inlinehilite
@@ -61,10 +80,31 @@ markdown_extensions:
         - name: mermaid
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_code_format
+        - name: chart
+          class: chart-block
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - attr_list
   - tables
   - toc:
       permalink: true
+  # Iconos por shortcode (ej. :material-rocket:) -> SVG inline en el HTML,
+  # via el set de iconos que mkdocs-material ya trae empaquetado
+  # (material/templates/.icons/, ~7500 SVGs entre material/fontawesome/
+  # octicons/simple) -- cero vendorizado nuevo, cero peticion extra en el
+  # navegador, offline por construccion (verificado leyendo el generador:
+  # to_svg() detecta un shortcode SIN codigo unicode -- osea un icono, no
+  # un emoji real -- y lo resuelve leyendo el .svg local, nunca red).
+  #
+  # Limite conocido, a proposito sin resolver: la MISMA extension tambien
+  # habilita shortcodes de emoji normales (ej. :smile:), que SI delegan a
+  # `pymdownx.emoji` puro y ESE si arma un <img src="https://cdn...">
+  # remoto -- rompe offline-first si algun repo conectado usa esa sintaxis
+  # para emojis decorativos (no para iconos). Nadie pidio soporte de
+  # emoji, asi que se deja documentado en vez de vendorizar Twemoji entero
+  # para un caso que no se ha necesitado.
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 hooks:
   - hooks/fix_ezlinks_anchors.py
