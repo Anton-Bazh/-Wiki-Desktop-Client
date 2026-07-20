@@ -93,7 +93,9 @@
       --tag-6-bg: #f0f9e3; --tag-6-text: #4d7c0f;
     }
     * { box-sizing: border-box; }
-    html, body { height: 100%; }
+    /* overscroll: sin rebote elastico -- mismo motivo que en la wiki
+       (extra.css): el rebote despegaba el topbar mostrando el fondo. */
+    html, body { height: 100%; overscroll-behavior-y: none; }
     body {
       margin: 0;
       background: var(--bg);
@@ -140,6 +142,10 @@
       flex-shrink: 0;
     }
     .icon-btn:hover { background: var(--border); color: var(--text); }
+    /* Siempre a la esquina derecha: en paginas sin buscador (/_admin no
+       define el bloque search) nada empujaba el boton y la luna quedaba
+       pegada al logo. Con buscador (flex: 1) el margen auto no estorba. */
+    #theme-toggle { margin-left: auto; }
     .topbar-brand { display: flex; align-items: center; gap: 0.55rem; text-decoration: none; color: inherit; flex-shrink: 0; }
     .topbar-brand img { width: 1.5rem; height: 1.5rem; object-fit: contain; }
     .topbar-brand .brand-logo-dark { display: none; }

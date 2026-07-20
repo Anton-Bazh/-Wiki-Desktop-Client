@@ -27,4 +27,44 @@
     html:has(body[data-md-color-scheme="default"]) { background: #fff; }
     html:has(body[data-md-color-scheme="slate"]) { background: #1e2129; }
   </style>
+  {#
+    Tema unificado con el shell de la app (hub/admin): una sola fuente de
+    verdad, la clave `wdc-theme` de localStorage (la que escribe el toggle
+    del shell). Aqui se traduce a la paleta de Material ANTES de que su
+    script de paleta (partials/javascripts/palette.html, incluido en el
+    header) la lea y aplique -- los helpers __md_set/__md_get ya existen
+    en este punto (partials/javascripts/base.html se incluye antes de
+    extrahead, verificado en base.html del paquete instalado).
+
+    Indices segun el orden de `palette:` en mkdocs.yml: 0 = auto
+    (preferencia del sistema), 1 = claro, 2 = oscuro. Sin `wdc-theme`
+    no se toca nada: ambas superficies caen a la preferencia del sistema.
+  #}
+  <script>
+    (function () {
+      var t = localStorage.getItem('wdc-theme');
+      if (t !== 'dark' && t !== 'light') return;
+      __md_set('__palette', t === 'dark'
+        ? { index: 2, color: { media: '(prefers-color-scheme: dark)', scheme: 'slate', primary: 'indigo', accent: 'indigo' } }
+        : { index: 1, color: { media: '(prefers-color-scheme: light)', scheme: 'default', primary: 'indigo', accent: 'indigo' } });
+    })();
+  </script>
+  {#
+    Direccion contraria: el toggle nativo de la wiki tambien escribe
+    `wdc-theme`, para que el hub amanezca en el mismo tema. Delegado en
+    document porque los radios de la paleta viven en el <body> que aun no
+    se parsea; "change" burbujea. Elegir "auto" borra la clave: las dos
+    superficies vuelven a seguir al sistema.
+  #}
+  <script>
+    document.addEventListener('change', function (e) {
+      var input = e.target;
+      if (!input || input.name !== '__palette') return;
+      if (input.getAttribute('data-md-color-media') === '(prefers-color-scheme)') {
+        localStorage.removeItem('wdc-theme');
+      } else {
+        localStorage.setItem('wdc-theme', input.getAttribute('data-md-color-scheme') === 'slate' ? 'dark' : 'light');
+      }
+    });
+  </script>
 {% endblock %}

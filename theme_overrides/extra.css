@@ -11,7 +11,89 @@
    colores reales medidos en el navegador para cada esquema en su lugar. */
 html {
   background: #fff;
+  /* Sin rebote elastico: al pasarse del inicio/fin del documento, el
+     navegador desplazaba la pagina entera y header/footer "se
+     despegaban" mostrando el fondo (reportado en Firefox con touchpad). */
+  overscroll-behavior-y: none;
 }
 html:has(body[data-md-color-scheme="slate"]) {
   background: #1e2129;
+}
+
+/* ---------------------------------------------------------------------
+   Tema unificado con el shell de MARC (webapp/templates/shell.html):
+   mismos colores de superficie, borde, texto y acento que el hub, para
+   que hub y wiki se vean como una sola app. Valores duplicados a
+   proposito -- son dos motores de plantillas distintos sin forma limpia
+   de compartir variables; si cambian en shell.html, cambiarlos aqui.
+   --------------------------------------------------------------------- */
+
+/* Acento MARC en vez del indigo default de Material (links, nav activa,
+   focus). --md-primary-fg-color ya no pinta el header (se overridea
+   abajo), pero si botones/detalles sueltos. */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #5b56f0;
+  --md-accent-fg-color: #4f4ad8;
+  --md-typeset-a-color: #5b56f0;
+}
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #8b86ff;
+  --md-accent-fg-color: #a5a1ff;
+  --md-typeset-a-color: #8b86ff;
+}
+
+/* Header con la piel del topbar del shell (--surface-2 + --border),
+   en vez del indigo primario de Material. */
+.md-header {
+  box-shadow: none;
+}
+[data-md-color-scheme="default"] .md-header {
+  background: #eef0f5;
+  color: #191b22;
+  border-bottom: 1px solid #e2e5eb;
+}
+[data-md-color-scheme="slate"] .md-header {
+  background: #15161c;
+  color: #e7e8ee;
+  border-bottom: 1px solid #262832;
+}
+
+/* Logo por esquema (el shell hace lo mismo): con el header ya no indigo,
+   el logo blanco fijo de theme.logo seria invisible en claro. Las <img>
+   las pone el override de partials/header.html. */
+/* `.md-logo img` delante: la regla propia de Material es
+   `.md-header__button.md-logo img { display: block; ... }` (0,2,1) y sin
+   este prefijo las clases solas (0,1,0 / 0,2,0) perdian el cascade -- se
+   veian los dos logos apilados (verificado con getComputedStyle). */
+.md-logo img.wdc-logo { width: 1.5rem; height: 1.5rem; object-fit: contain; }
+.md-logo img.wdc-logo-dark { display: none; }
+[data-md-color-scheme="slate"] .md-logo img.wdc-logo-light { display: none; }
+[data-md-color-scheme="slate"] .md-logo img.wdc-logo-dark { display: block; }
+
+/* Buscador del header, mismo trato que .topbar-search del shell:
+   superficie clara con borde, no el rectangulo translucido que Material
+   trae para headers de color primario. */
+.md-search__form {
+  border-radius: 9px;
+}
+[data-md-color-scheme="default"] .md-search__form {
+  background: #ffffff;
+  border: 1px solid #e2e5eb;
+}
+[data-md-color-scheme="slate"] .md-search__form {
+  background: #1a1c23;
+  border: 1px solid #262832;
+}
+[data-md-color-scheme="default"] .md-search__form:hover,
+[data-md-color-scheme="slate"] .md-search__form:hover {
+  border-color: var(--md-primary-fg-color);
+}
+[data-md-toggle="search"]:checked ~ .md-header .md-search__form {
+  border-radius: 9px 9px 0 0;
+  background: var(--md-default-bg-color);
+  border-color: transparent;
+}
+.md-search__input::placeholder {
+  color: inherit;
+  opacity: 0.6;
 }

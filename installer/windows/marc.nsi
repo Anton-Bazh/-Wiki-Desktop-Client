@@ -4,7 +4,7 @@
 
 Unicode true
 
-!define VERSION "1.0.0"
+!define VERSION "1.0.2"
 !define PRODUCT_NAME "MARC"
 !define PUBLISHER "Antonio Baeza"
 

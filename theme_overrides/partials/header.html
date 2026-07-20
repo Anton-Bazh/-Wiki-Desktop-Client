@@ -18,8 +18,13 @@
     <a href="#" onclick="event.preventDefault(); history.back();" title="Atrás" aria-label="Atrás" class="md-header__button md-icon">
       <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
     </a>
+    {#- Logo por esquema en vez de partials/logo.html (config.theme.logo
+        fija uno solo, el blanco, que con el header ya no indigo seria
+        invisible en claro -- ver .wdc-logo en extra.css). Rutas absolutas
+        de FastAPI: la wiki siempre se ve a traves de su proxy. -#}
     <a href="/" title="Hub — MARC" class="md-header__button md-logo" aria-label="Hub — MARC" data-md-component="logo">
-      {% include "partials/logo.html" %}
+      <img src="/branding/logo.png" alt="" class="wdc-logo wdc-logo-light">
+      <img src="/branding/logo-white.png" alt="" class="wdc-logo wdc-logo-dark">
     </a>
     <label class="md-header__button md-icon" for="__drawer">
       {% set icon = config.theme.icon.menu or "material/menu" %}
@@ -194,21 +199,8 @@
   .about-creator-links a:hover { color: var(--wdc-accent); }
   .about-credit { font-size: 0.72rem; line-height: 1.5; color: var(--wdc-muted); margin: 0; }
 
-  /* Buscador nativo, restilado: la caja por defecto de mkdocs-material
-     es un rectangulo casi sin esquinas y muy poco contraste sobre el
-     header indigo. */
-  .md-search__form {
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.16);
-    transition: background 0.15s ease;
-  }
-  .md-search__form:hover { background: rgba(255, 255, 255, 0.24); }
-  [data-md-toggle="search"]:checked ~ .md-header .md-search__form {
-    border-radius: 10px 10px 0 0;
-    background: var(--md-default-bg-color);
-  }
-  .md-search__input + .md-search__icon { opacity: 0.85; }
-  .md-search__input::placeholder { opacity: 0.75; }
+  /* El restyle del buscador vive ahora en extra.css junto con la piel
+     del header (tema unificado con el shell). */
 </style>
 
 <script>
