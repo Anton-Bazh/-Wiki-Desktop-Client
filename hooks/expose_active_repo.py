@@ -2,7 +2,7 @@
 (`config.extra.active_repo_name`), leyendo directamente `webapp/config.json`
 (la fuente de verdad del backend -- ver `webapp/server.py`). Sin esto,
 MkDocs no tiene forma de saber que repo esta sirviendo: `site_name` es
-fijo ("Wiki Desktop Client") porque es el nombre de la app, no del
+fijo ("MARC") porque es el nombre de la app, no del
 contenido conectado. Lo usa `theme_overrides/partials/path.html` para
 la ruta bajo el header (ej. "QALPIX-DOC / wiki / 00-indice").
 """

@@ -1,10 +1,11 @@
 {% import "icons.html" as icons %}
 <div class="about-overlay" id="about-overlay" onclick="if (event.target === this) closeAboutModal();">
-  <div class="about-modal" role="dialog" aria-modal="true" aria-label="Acerca de Wiki Desktop Client">
+  <div class="about-modal" role="dialog" aria-modal="true" aria-label="Acerca de MARC">
     <button type="button" class="about-close" aria-label="Cerrar" onclick="closeAboutModal();">{{ icons.close() }}</button>
 
     <img class="about-mark" src="/branding/logo-ring.png" alt="">
-    <h2 class="about-title">Wiki Desktop Client</h2>
+    <h2 class="about-title">MARC</h2>
+    <p class="about-meaning">Markdown Automatizado por Repo y Consulta</p>
     <span class="about-version">v{{ app_version }}</span>
 
     <p class="about-pitch">
@@ -79,6 +80,7 @@
     filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.18));
   }
   .about-title { font-size: 1.15rem; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+  .about-meaning { font-size: 0.72rem; color: var(--text-muted); margin: 0.2rem 0 0; letter-spacing: 0.01em; }
   .about-version {
     display: inline-block;
     margin-top: 0.4rem;

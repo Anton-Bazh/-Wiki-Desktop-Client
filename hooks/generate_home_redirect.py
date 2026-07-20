@@ -29,10 +29,23 @@ def on_post_build(config):
         # El repo ya trae su propia portada (index.md o README.md).
         return
 
+    # La pagina de redirect es una navegacion completa real (el logo del
+    # header apunta aqui) -- sin estilo propio, el navegador mostraba su
+    # lienzo default (negro en tema oscuro) mas el texto "Redirigiendo",
+    # percibido como un parpadeo negro al volver al inicio de la wiki. Se
+    # pinta el mismo fondo por esquema que el resto de las paginas y el
+    # texto solo aparece si el redirect tarda de verdad (fallback).
     index_path.write_text(
         f"""<!doctype html>
 <meta charset="utf-8">
-<title>Wiki Desktop Client</title>
+<meta name="color-scheme" content="light dark">
+<title>{config["site_name"]}</title>
+<style>
+  html {{ background: #fff; }}
+  @media (prefers-color-scheme: dark) {{ html {{ background: #1e2129; }} }}
+  p {{ font-family: system-ui, sans-serif; opacity: 0; animation: aparecer 0s 1.5s forwards; }}
+  @keyframes aparecer {{ to {{ opacity: 1; }} }}
+</style>
 <meta http-equiv="refresh" content="0; url={first_page_url}">
 <link rel="canonical" href="{first_page_url}">
 <p>Redirigiendo a <a href="{first_page_url}">{first_page_url}</a>...</p>

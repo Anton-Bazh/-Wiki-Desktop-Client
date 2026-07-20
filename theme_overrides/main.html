@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{#
+  Estilo critico inline contra el parpadeo entre paginas.
+
+  extra.css ya fija el fondo de <html> por esquema, pero es una hoja
+  EXTERNA: en una navegacion completa el navegador pinta su lienzo
+  default (negro en navegadores con tema oscuro) durante los milisegundos
+  previos a que el CSS llegue y aplique -- ese es el "parpadeo negro" al
+  cambiar de pagina. Un <style> inline en el <head> aplica en cuanto se
+  parsea el documento, antes de cualquier request de CSS.
+
+  <meta name="color-scheme"> ademas le dice al navegador que pinte su
+  lienzo inicial segun la preferencia del sistema (claro u oscuro) en vez
+  de su default, cerrando la ventana anterior incluso al propio parseo.
+
+  Las reglas :has() replican las de extra.css para respetar el toggle
+  manual de paleta cuando difiere de la preferencia del sistema.
+#}
+{% block extrahead %}
+  <meta name="color-scheme" content="light dark">
+  <style>
+    html { background: #fff; }
+    @media (prefers-color-scheme: dark) {
+      html { background: #1e2129; }
+    }
+    html:has(body[data-md-color-scheme="default"]) { background: #fff; }
+    html:has(body[data-md-color-scheme="slate"]) { background: #1e2129; }
+  </style>
+{% endblock %}

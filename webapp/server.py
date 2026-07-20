@@ -168,7 +168,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Wiki Desktop Client", lifespan=lifespan)
+app = FastAPI(title="MARC", lifespan=lifespan)
 app.mount("/branding", StaticFiles(directory=str(PROJECT_ROOT / "branding")), name="branding")
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 templates.env.globals["app_version"] = APP_VERSION
@@ -457,12 +457,12 @@ def kill_mkdocs() -> None:
     try:
         pid = int(MKDOCS_PID_PATH.read_text(encoding="utf-8").strip())
         os.kill(pid, signal.SIGTERM)
-        for _ in range(20):
+        for _ in range(40):
             try:
                 os.kill(pid, 0)
             except ProcessLookupError:
                 break
-            time.sleep(0.2)
+            time.sleep(0.1)
     except (ValueError, ProcessLookupError, PermissionError):
         pass
     finally:
@@ -489,10 +489,10 @@ def spawn_mkdocs() -> None:
         start_new_session=True,
     )
     MKDOCS_PID_PATH.write_text(str(proc.pid), encoding="utf-8")
-    for _ in range(20):
+    for _ in range(60):
         if mkdocs_is_running():
             return
-        time.sleep(0.3)
+        time.sleep(0.1)
 
 
 def ensure_mkdocs_running() -> None:
@@ -606,10 +606,19 @@ def select(repo_id: str):
     config = read_config()
     if get_repo(config, repo_id) is None:
         return RedirectResponse("/_admin", status_code=303)
+    # Si el repo ya era el activo, el mkdocs que corre ya sirve ese
+    # contenido: reiniciarlo solo hace esperar el rebuild completo
+    # (varios segundos) para terminar sirviendo exactamente lo mismo.
+    # Era la causa de que abrir desde el Hub la wiki ya activa tardara
+    # tanto como cambiar de repo.
+    was_active = config["active_id"] == repo_id
     config["active_id"] = repo_id
     write_config(config)
     set_active_docs_dir(repo_id)
-    restart_mkdocs()
+    if was_active:
+        ensure_mkdocs_running()
+    else:
+        restart_mkdocs()
     return RedirectResponse("/wiki", status_code=303)
 
 
@@ -733,6 +742,11 @@ def hub(request: Request):
     )
 
 
+# La documentacion de uso se sincroniza a lo mucho una vez por corrida
+# del proceso (ver docs()).
+_docs_synced = False
+
+
 @app.get("/_docs")
 def docs():
     """Documentacion de uso de la app: la sincroniza y manda directo a
@@ -747,12 +761,21 @@ def docs():
     "Quitar"-able en el panel de Repositorios -- pudiendo incluso borrarlo
     por accidente. get_active_repo() sabe reconocerlo igual como activo
     sin que viva en esa lista."""
+    global _docs_synced
     if not DOCS_REPO_URL:
         return RedirectResponse("/_admin", status_code=303)
 
     repo_id = repo_id_for(DOCS_REPO_URL)
     dest = REPOS_DIR / repo_id
-    run_sync(DOCS_REPO_URL, None, dest)
+    # El pull se hace UNA vez por corrida del proceso, no en cada visita:
+    # antes cada clic en "Documentacion" pagaba un git pull de red completo
+    # (varios segundos) aun teniendo el clon fresco en disco. La doc de uso
+    # cambia con releases de la app, no minuto a minuto -- el mismo criterio
+    # que el pull de arranque del lifespan para el repo activo. Sin clon
+    # todavia (primera vez) si se bloquea: no hay nada que servir sin el.
+    if not _docs_synced or not (dest / ".git").exists():
+        run_sync(DOCS_REPO_URL, None, dest)
+        _docs_synced = True
     if not (dest / ".git").exists():
         # Nunca se pudo clonar (ni antes ni ahora) -- no hay nada que servir.
         return RedirectResponse("/_admin", status_code=303)
