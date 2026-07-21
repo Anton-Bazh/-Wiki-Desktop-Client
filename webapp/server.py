@@ -99,6 +99,17 @@ SITES_DIR.mkdir(exist_ok=True)
 KEYRING_SERVICE = "wiki-desktop-client"
 LEGACY_TOKEN_KEY = "github-pat"  # esquema de un solo repo, pre-multi-repo
 
+# Todo bajo /wiki/ y /_docs/ vive en la misma URL sin importar que repo esta
+# activo -- select() puede cambiar que carpeta de SITES_DIR se sirve de una
+# request a la siguiente. FileResponse/RedirectResponse no ponen Cache-Control
+# por su cuenta, y el navegador cachea agresivamente sin el (en particular los
+# 308 de forma practicamente permanente): sin este header, cambiar de repo
+# activo no se nota en pestañas que ya habian visitado /wiki/ antes, sirviendo
+# de cache el contenido del repo viejo -- confirmado con Playwright, viendo
+# requestStart/responseStart en -1 (ninguna request de red real) en la segunda
+# navegacion tras un select() a otro repo. Ver doc 28 en Obsidian.
+NO_STORE_HEADERS = {"Cache-Control": "no-store"}
+
 APP_VERSION = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 # Repo fijo con la documentacion de uso de la app (no del contenido de
@@ -341,17 +352,17 @@ def serve_site(repo_id: str, path: str, url_prefix: str):
     ensure_site_built(repo_id)
     resolved = _resolve_site_file(repo_id, path)
     if resolved is None:
-        return HTMLResponse("<p>Página no encontrada.</p>", status_code=404)
+        return HTMLResponse("<p>Página no encontrada.</p>", status_code=404, headers=NO_STORE_HEADERS)
     file_path, is_dir_index = resolved
     if is_dir_index and path != "" and not path.endswith("/"):
         target = f"/{url_prefix}/{path}".rstrip("/") + "/"
-        return RedirectResponse(target, status_code=308)
+        return RedirectResponse(target, status_code=308, headers=NO_STORE_HEADERS)
     if not file_path.is_file():
         not_found = SITES_DIR / repo_id / "404.html"
         if not_found.is_file():
-            return FileResponse(not_found, status_code=404)
-        return HTMLResponse("<p>Página no encontrada.</p>", status_code=404)
-    return FileResponse(file_path)
+            return FileResponse(not_found, status_code=404, headers=NO_STORE_HEADERS)
+        return HTMLResponse("<p>Página no encontrada.</p>", status_code=404, headers=NO_STORE_HEADERS)
+    return FileResponse(file_path, headers=NO_STORE_HEADERS)
 
 
 def repo_display_name(repo_url: str) -> str:
@@ -746,7 +757,7 @@ def wiki_index():
     # Si no hay repo activo, / mismo lo explica mejor que un 404 aqui.
     if get_active_repo(read_config()) is None:
         return RedirectResponse("/", status_code=303)
-    return RedirectResponse("/wiki/", status_code=308)
+    return RedirectResponse("/wiki/", status_code=308, headers=NO_STORE_HEADERS)
 
 
 @app.get("/wiki/{path:path}")
