@@ -11,7 +11,7 @@
 {% endblock %}
 
 {% block sidebar %}
-  <a class="sidebar-connect" href="/_admin">{{ icons.plus() }} Conectar repositorio</a>
+  <a class="sidebar-connect" href="#" onclick="event.preventDefault(); openAdminModal();">{{ icons.plus() }} Conectar repositorio</a>
 
   <div class="sidebar-section">
     <span class="sidebar-eyebrow">Accesos</span>
@@ -53,7 +53,7 @@
     <div class="empty-state">
       {{ icons.repo() }}
       <p>Todavía no hay repositorios conectados.</p>
-      <a class="button-primary" href="/_admin">{{ icons.plus() }} Conectar repositorio</a>
+      <a class="button-primary" href="#" onclick="event.preventDefault(); openAdminModal();">{{ icons.plus() }} Conectar repositorio</a>
     </div>
   {% endif %}
 {% endblock %}

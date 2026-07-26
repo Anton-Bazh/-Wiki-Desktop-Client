@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Sube el parche de VERSION (raiz del proyecto) en cada commit, para que
+# Antonio no tenga que decidir/escribir el numero a mano -- ver la fuente
+# unica de VERSION en webapp/server.py (APP_VERSION), build-deb.sh e
+# installer/windows/build.sh.
+#
+# Instalar una sola vez por clon: `git config core.hooksPath .githooks`
+# (este archivo vive versionado aqui, no en .git/hooks, para que sobreviva
+# a un re-clone).
+#
+# Si VERSION ya viene modificado a mano como parte de este mismo commit
+# (staged, distinto del ultimo commit), se respeta ese valor tal cual y no
+# se autoincrementa encima -- MAYOR/MENOR siguen siendo decision humana,
+# el hook solo se encarga del PARCHE cuando nadie toco VERSION.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+VERSION_FILE="$ROOT/VERSION"
+
+current="$(cat "$VERSION_FILE" 2>/dev/null || echo "")"
+if ! [[ "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "pre-commit: VERSION invalido ('$current'), debe ser MAYOR.MENOR.PARCHE (enteros separados por punto)." >&2
+  exit 1
+fi
+
+if git diff --cached --name-only | grep -qx "VERSION"; then
+  exit 0
+fi
+
+IFS='.' read -r major minor patch <<< "$current"
+new_version="$major.$minor.$((patch + 1))"
+printf '%s' "$new_version" > "$VERSION_FILE"
+git add "$VERSION_FILE"
+echo "pre-commit: VERSION $current -> $new_version"

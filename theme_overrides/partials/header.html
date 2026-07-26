@@ -63,6 +63,12 @@
         <circle cx="12" cy="7.8" r="1" style="fill:currentColor"/>
       </svg>
     </a>
+    <a href="#" onclick="event.preventDefault(); marcExit();" title="Salir (detiene el servidor local)" aria-label="Salir de MARC" class="md-header__button md-icon">
+      <svg viewBox="0 0 24 24" width="24" height="24">
+        <path d="M12 4v7.2" style="fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round"/>
+        <path d="M16.9 6.4a7.4 7.4 0 1 1-9.8 0" style="fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round"/>
+      </svg>
+    </a>
     {% if config.theme.palette %}
       {% if not config.theme.palette is mapping %}
         {% include "partials/palette.html" %}
@@ -215,4 +221,14 @@
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') closeAboutModal();
   });
+
+  function marcExit() {
+    if (!window.confirm('¿Salir de MARC? Esto detiene el servidor local y cierra esta ventana.')) return;
+    fetch('/shutdown', { method: 'POST' }).catch(function () {}).then(function () {
+      window.close();
+      setTimeout(function () {
+        document.body.innerHTML = '<p style="padding:3rem 1.5rem;font:0.95rem -apple-system,sans-serif;text-align:center;color:#6b7180">MARC se cerró. Puedes cerrar esta ventana.</p>';
+      }, 300);
+    });
+  }
 </script>

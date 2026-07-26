@@ -12,6 +12,8 @@ runtime/*/
 # Instaladores compilados -- se generan con installer/windows/marc.nsi,
 # no se versionan.
 dist/
+# Generado por installer/windows/build.sh a partir de VERSION (raiz).
+installer/windows/version.nsh
 webapp/config.json
 webapp/page_index.json
 webapp/__pycache__/

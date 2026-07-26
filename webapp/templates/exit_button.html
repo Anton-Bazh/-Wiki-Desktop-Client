@@ -1,0 +1,14 @@
+<button type="button" id="exit-button" class="icon-btn" aria-label="Salir de MARC" title="Salir (detiene el servidor local)" onclick="marcExit()">
+  <svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3v6"/><path d="M14.2 5.3a6.2 6.2 0 1 1-8.4 0"/></svg>
+</button>
+<script>
+function marcExit() {
+  if (!window.confirm('¿Salir de MARC? Esto detiene el servidor local y cierra esta ventana.')) return;
+  fetch('/shutdown', { method: 'POST' }).catch(function () {}).then(function () {
+    window.close();
+    setTimeout(function () {
+      document.body.innerHTML = '<p style="padding:3rem 1.5rem;font:0.95rem -apple-system,sans-serif;text-align:center;color:#6b7180">MARC se cerró. Puedes cerrar esta ventana.</p>';
+    }, 300);
+  });
+}
+</script>

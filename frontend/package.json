@@ -1,11 +1,20 @@
 {
   "name": "marc-frontend",
   "private": true,
-  "description": "Fuente TypeScript de la logica interactiva de la wiki (graficas, y a futuro KaTeX/iconos) -- compila a vendor/marc-interactive.js, que es lo que mkdocs.yml realmente carga. Herramienta de la maquina de desarrollo unicamente: el Python empaquetado no lleva Node, nunca se compila en el instalador.",
+  "description": "Fuente TypeScript de la logica interactiva de la wiki (graficas, formulas, diagramas) -- compila a vendor/*.js, que es lo que mkdocs.yml realmente carga. Herramienta de la maquina de desarrollo unicamente: el Python empaquetado no lleva Node, nunca se compila en el instalador. Dos pipelines: tsc puro para marc-interactive.ts (sin dependencias de node_modules, solo globals ya vendorizados), esbuild para marc-flow.tsx (si empaqueta node_modules reales: React + @xyflow/react, ver frontend/README.md).",
   "scripts": {
-    "build": "tsc"
+    "build": "npm run build:interactive && npm run typecheck:flow && npm run build:flow",
+    "build:interactive": "tsc",
+    "typecheck:flow": "tsc -p tsconfig.flow.json --noEmit",
+    "build:flow": "esbuild src/marc-flow.tsx --bundle --minify --jsx=automatic --outdir=../vendor --entry-names=marc-flow"
   },
   "devDependencies": {
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "esbuild": "^0.24.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "@xyflow/react": "^12.3.5",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1"
   }
 }

@@ -67,4 +67,30 @@
       }
     });
   </script>
+  {#
+    Sync casi automatico: cada pagina de la wiki hace poll silencioso a
+    /api/sync-check (fetch+ff-merge del repo activo + rebuild solo si
+    hubo commits nuevos, ver server.py). Si `updated` viene true, la
+    pagina se recarga sola -- asi un push reciente llega sin que el
+    usuario tenga que abrir _admin y darle a Resincronizar. Se salta el
+    poll con la pestaña en segundo plano (document.hidden) para no gastar
+    red sin que nadie este viendo la wiki.
+  #}
+  <script>
+    (function () {
+      var SYNC_POLL_MS = 20000;
+      var syncing = false;
+      setInterval(function () {
+        if (syncing || document.hidden) return;
+        syncing = true;
+        fetch('/api/sync-check', { method: 'POST' })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (data.updated) window.location.reload();
+          })
+          .catch(function () {})
+          .finally(function () { syncing = false; });
+      }, SYNC_POLL_MS);
+    })();
+  </script>
 {% endblock %}

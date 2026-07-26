@@ -39,7 +39,10 @@ import json
 import os
 import re
 import shutil
+import signal
 import tempfile
+import threading
+import time
 import unicodedata
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -151,7 +154,7 @@ async def lifespan(app: FastAPI):
     active = get_active_repo(config)
     if active is not None:
         token = keyring.get_password(KEYRING_SERVICE, token_key(active["id"]))
-        dest = REPOS_DIR / active["id"]
+        dest = repo_dir(active["id"])
         ok, message = run_sync(active["repo_url"], token, dest)
         startup_sync = (ok, message)
         # Se construye el sitio estatico aunque el pull automatico falle
@@ -237,6 +240,18 @@ def get_repo(config: dict, repo_id: str) -> dict | None:
     return next((r for r in config["repos"] if r["id"] == repo_id), None)
 
 
+def repo_dir(repo_id: str) -> Path:
+    """Carpeta donde vive el clon de `repo_id`: la ruta que el usuario haya
+    elegido al conectar (`custom_path`, ver connect()) o la interna de
+    REPOS_DIR si no eligio ninguna. Repos que no viven en config["repos"]
+    (ej. DOCS_REPO_URL, ver docs()) siempre caen al default -- nunca
+    tienen custom_path por diseno, asi que no hace falta distinguirlos
+    aqui."""
+    repo = get_repo(read_config(), repo_id)
+    custom = repo.get("custom_path") if repo else None
+    return Path(custom) if custom else REPOS_DIR / repo_id
+
+
 def get_active_repo(config: dict) -> dict | None:
     if config["active_id"] is None:
         return None
@@ -267,7 +282,7 @@ def build_site(repo_id: str) -> bool:
     Unix sin privilegios especiales) sin sustituirlo por otro mecanismo
     fragil: aqui no hay ruta compartida "activa" que reapuntar, cada repo
     tiene su propia carpeta de salida fija."""
-    dest = REPOS_DIR / repo_id
+    dest = repo_dir(repo_id)
     if not (dest / ".git").exists():
         return False
     # El nombre del breadcrumb (config.extra["active_repo_name"], ver
@@ -385,7 +400,7 @@ def repo_last_update(repo_id: str) -> str | None:
     clonado, así que no hace falta una llamada de red aparte (que ademas
     fallaria sin token en repos privados, o por rate limit si no hay
     token)."""
-    dest = REPOS_DIR / repo_id
+    dest = repo_dir(repo_id)
     if not (dest / ".git").exists():
         return None
     try:
@@ -442,7 +457,7 @@ def build_page_index(repo_id: str) -> list[dict]:
     Verificado contra el codigo fuente instalado que ninguno de los
     plugins activos (search, ezlinks, embed_file, callouts) depende de
     pasos posteriores a on_files/get_navigation para esto."""
-    dest = REPOS_DIR / repo_id
+    dest = repo_dir(repo_id)
     if not (dest / ".git").exists():
         return []
     with tempfile.TemporaryDirectory() as tmp:
@@ -507,27 +522,61 @@ def run_sync(repo_url: str, token: str | None, dest: Path) -> tuple[bool, str]:
         return False, str(e) or "Error desconocido al sincronizar."
 
 
-def render_admin(
+def render_hub(
     request: Request,
     config: dict,
     *,
+    admin_open: bool = False,
     error: str | None = None,
     repo_url_prefill: str = "",
+    custom_path_prefill: str = "",
+    editing_id: str | None = None,
     sync_message: str | None = None,
     sync_ok: bool | None = None,
 ):
-    repos = [
-        {**r, "name": repo_display_name(r["repo_url"]), "owner": repo_owner(r["repo_url"])}
-        for r in config["repos"]
-    ]
+    """Renderiza el Hub -- el panel de "Repositorios" ya no es una pagina
+    aparte (ver admin_modal.html, incluido una sola vez en shell.html):
+    viaja siempre incrustado como modal en esta misma respuesta, cerrado
+    por defecto. `admin_open` es lo unico que decide si se abre solo al
+    cargar la pagina (ver DOMContentLoaded en admin_modal.html) -- true
+    cuando se llega desde /_admin, o justo despues de conectar/editar/
+    desconectar/resincronizar un repo, para que el usuario vea el
+    resultado sin tener que reabrirlo el mismo. Una sola lista de repos
+    alimenta tanto las tarjetas del hub (badge/page_count/last_update/
+    search) como las filas del modal (owner/path)."""
+    repos = []
+    for r in config["repos"]:
+        name = repo_display_name(r["repo_url"])
+        pages = PAGE_INDEX.get(r["id"], [])
+        search_blob = " ".join([name] + [p["title"] for p in pages]).lower()
+        repos.append(
+            {
+                **r,
+                "name": name,
+                "owner": repo_owner(r["repo_url"]),
+                "path": r.get("custom_path") or str(REPOS_DIR / r["id"]),
+                "badge": badge_class(r["id"]),
+                "page_count": len(pages),
+                "last_update": relative_date(cached_last_update(r["id"])),
+                "search": search_blob,
+            }
+        )
     return templates.TemplateResponse(
         request,
-        "admin.html",
+        "hub.html",
         {
             "repos": repos,
             "active_id": config["active_id"],
+            "admin_open": admin_open,
             "error": error,
             "repo_url": repo_url_prefill,
+            "custom_path": custom_path_prefill,
+            # Placeholder del campo de carpeta custom: una ruta real de
+            # este sistema (no un texto generico), para que se lea de un
+            # vistazo como una ruta de archivos y no como un campo vacio
+            # cualquiera (ver admin_modal.html).
+            "custom_path_example": str(REPOS_DIR / "mi-repo"),
+            "editing_id": editing_id,
             "sync_message": sync_message,
             "sync_ok": sync_ok,
         },
@@ -535,7 +584,13 @@ def render_admin(
 
 
 @app.get("/_admin", response_class=HTMLResponse)
-def admin(request: Request):
+def admin(request: Request, edit: str | None = None):
+    """Ya no es una pagina propia: redirige el mismo Hub, con el modal de
+    Repositorios abierto de entrada (`admin_open=True`). Sigue existiendo
+    como ruta real (no un simple alias del boton del Hub) porque el header
+    de la wiki (`theme_overrides/partials/header.html`) vive en un sitio
+    estatico aparte, sin el modal incrustado -- ese link sigue navegando
+    aqui de verdad, y aterriza en el Hub con el panel ya abierto."""
     global startup_sync
     config = read_config()
     # El aviso del sync automatico de arranque se muestra una sola vez
@@ -546,30 +601,95 @@ def admin(request: Request):
         sync_ok, base_message = startup_sync
         sync_message = ("Sincronizado al arrancar. " if sync_ok else "No se pudo sincronizar al arrancar (se muestra la última copia local). ") + base_message
         startup_sync = None
-    return render_admin(request, config, sync_message=sync_message, sync_ok=sync_ok)
+    # ?edit=<repo_id> (boton "Editar" de cada fila, ver admin_modal.html)
+    # precarga el formulario de conectar con los datos de ese repo --
+    # "editar" no es una operacion nueva, es resubmitir /connect con la
+    # URL que ya tenia (mismo repo_id) y la carpeta que quiera cambiar;
+    # connect() ya sabe tratar eso como reconexion en vez de alta nueva.
+    edit_repo = get_repo(config, edit) if edit else None
+    return render_hub(
+        request,
+        config,
+        admin_open=True,
+        sync_message=sync_message,
+        sync_ok=sync_ok,
+        repo_url_prefill=edit_repo["repo_url"] if edit_repo else "",
+        custom_path_prefill=(edit_repo.get("custom_path", "") if edit_repo else ""),
+        editing_id=edit_repo["id"] if edit_repo else None,
+    )
 
 
 @app.post("/connect", response_class=HTMLResponse)
-def connect(request: Request, repo_url: str = Form(...), token: str = Form("")):
+def connect(request: Request, repo_url: str = Form(...), token: str = Form(""), custom_path: str = Form("")):
     repo_url = repo_url.strip()
     token = token.strip() or None
+    custom_path = custom_path.strip() or None
     config = read_config()
 
     if not repo_url.startswith("https://github.com/"):
-        return render_admin(
+        return render_hub(
             request,
             config,
+            admin_open=True,
             error="Solo se soportan repositorios de GitHub (https://github.com/...) en esta versión.",
             repo_url_prefill=repo_url,
+            custom_path_prefill=custom_path or "",
         )
 
     repo_id = repo_id_for(repo_url)
     existing = get_repo(config, repo_id)
-    dest = REPOS_DIR / repo_id
+    # Ruta donde vivia el clon ANTES de este submit (si el repo ya estaba
+    # conectado) -- para poder limpiar la carpeta vieja despues si el
+    # usuario esta editando y cambio de carpeta (ver mas abajo). Nunca se
+    # calcula con repo_dir() aqui: ya tenemos `existing` en mano, y
+    # ademas el disco todavia no se toco, asi que es exactamente la ruta
+    # real de donde viene el repo.
+    old_dest = None
+    old_was_custom = False
+    if existing is not None:
+        old_was_custom = bool(existing.get("custom_path"))
+        old_dest = Path(existing["custom_path"]) if old_was_custom else REPOS_DIR / repo_id
+
+    if custom_path:
+        dest = Path(custom_path).expanduser()
+        if not dest.is_absolute():
+            return render_hub(
+                request, config, admin_open=True,
+                error="La carpeta debe ser una ruta absoluta (ej. /home/tu-usuario/mis-wikis/repo).",
+                repo_url_prefill=repo_url, custom_path_prefill=custom_path,
+            )
+        if dest == REPOS_DIR or REPOS_DIR in dest.parents or dest == SITES_DIR or SITES_DIR in dest.parents:
+            return render_hub(
+                request, config, admin_open=True,
+                error="Elige una carpeta fuera de la carpeta interna de MARC.",
+                repo_url_prefill=repo_url, custom_path_prefill=custom_path,
+            )
+        # Colision: otro repo conectado ya usa esa misma carpeta como
+        # destino (custom o default) -- clonar ahi tambien lo dejaria con
+        # dos repos distintos peleando por el mismo working tree.
+        collision = next(
+            (
+                r for r in config["repos"]
+                if r["id"] != repo_id and Path(r.get("custom_path") or (REPOS_DIR / r["id"])) == dest
+            ),
+            None,
+        )
+        if collision is not None:
+            return render_hub(
+                request, config, admin_open=True,
+                error="Esa carpeta ya la está usando otro repositorio conectado.",
+                repo_url_prefill=repo_url, custom_path_prefill=custom_path,
+            )
+        dest.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        dest = REPOS_DIR / repo_id
 
     ok, message = run_sync(repo_url, token, dest)
     if not ok:
-        return render_admin(request, config, error=message, repo_url_prefill=repo_url)
+        return render_hub(
+            request, config, admin_open=True, error=message,
+            repo_url_prefill=repo_url, custom_path_prefill=custom_path or "",
+        )
 
     if token:
         keyring.set_password(KEYRING_SERVICE, token_key(repo_id), token)
@@ -580,9 +700,23 @@ def connect(request: Request, repo_url: str = Form(...), token: str = Form("")):
             pass
 
     if existing is None:
-        config["repos"].append({"id": repo_id, "repo_url": repo_url})
+        entry = {"id": repo_id, "repo_url": repo_url}
+        if custom_path:
+            entry["custom_path"] = str(dest)
+        config["repos"].append(entry)
+    else:
+        if custom_path:
+            existing["custom_path"] = str(dest)
+        else:
+            existing.pop("custom_path", None)
     config["active_id"] = repo_id
     write_config(config)
+
+    # Si esto era una edicion y cambio de carpeta, el clon viejo queda
+    # huerfano -- se borra solo si MARC lo gestionaba (nunca si el usuario
+    # ya habia elegido esa carpeta vieja, la misma regla que disconnect()).
+    if existing is not None and old_dest is not None and old_dest != dest and not old_was_custom:
+        shutil.rmtree(old_dest, ignore_errors=True)
 
     build_site(repo_id)
     refresh_page_index(repo_id)
@@ -612,18 +746,117 @@ def resync(request: Request):
     if active is None:
         return RedirectResponse("/_admin", status_code=303)
     token = keyring.get_password(KEYRING_SERVICE, token_key(active["id"]))
-    ok, message = run_sync(active["repo_url"], token, REPOS_DIR / active["id"])
+    ok, message = run_sync(active["repo_url"], token, repo_dir(active["id"]))
     if ok:
         build_site(active["id"])
         refresh_page_index(active["id"])
-    return render_admin(request, config, sync_message=message, sync_ok=ok)
+    return render_hub(request, config, admin_open=True, sync_message=message, sync_ok=ok)
+
+
+def _head_oid(dest: Path) -> str | None:
+    """OID del HEAD local, o None sin clon todavia -- para detectar si
+    run_sync() de verdad trajo commits nuevos (ver sync_check())."""
+    if not (dest / ".git").exists():
+        return None
+    try:
+        return str(pygit2.Repository(str(dest)).head.target)
+    except pygit2.GitError:
+        return None
+
+
+@app.get("/api/browse-fs")
+def browse_fs(path: str = ""):
+    """Explorador de carpetas propio (HTML/CSS/JS, ver el modal anidado
+    en admin_modal.html) para elegir la carpeta custom de un repo.
+    Reemplaza un primer intento con el selector nativo de tkinter: se veia
+    anticuado en Linux (Tk no hereda el tema GTK del sistema, ni con el
+    Tcl/Tk que ya trae empacado el runtime) y arreglarlo de verdad hubiera
+    significado agregar zenity/kdialog como dependencia del sistema --
+    justo lo que esta arquitectura evita a proposito (ver pygit2/vendor/
+    Python autocontenido en el docstring de arriba). Este explorador en
+    cambio es HTML plano: se ve identico (y ya combina con el resto de la
+    UI) en Linux y Windows, sin depender de nada del sistema operativo.
+
+    Solo devuelve directorios (nunca archivos, no hace falta para elegir
+    carpeta) y se salta los ocultos (empiezan con '.') para no saturar la
+    lista -- no hay forma de mostrarlos desde la UI, decision consciente
+    para mantener esto simple. Sin `path` (primera apertura) arranca en el
+    home del usuario."""
+    base = Path(path).expanduser() if path else Path.home()
+    if not base.is_dir():
+        base = Path.home()
+    base = base.resolve()
+
+    try:
+        entries = sorted(
+            (p for p in base.iterdir() if p.is_dir() and not p.name.startswith(".")),
+            key=lambda p: p.name.lower(),
+        )
+        dirs = [{"name": p.name, "path": str(p)} for p in entries]
+        error = None
+    except PermissionError:
+        dirs = []
+        error = "Sin permiso para ver el contenido de esta carpeta."
+
+    parent = base.parent
+    return {
+        "path": str(base),
+        # None en la raiz del filesystem (`/` en Linux, `C:\` en Windows):
+        # ahi `parent` coincide con el propio directorio, nada mas arriba
+        # que subir. El JS usa esto para ocultar la fila ".." en ese caso.
+        "parent": str(parent) if parent != base else None,
+        "dirs": dirs,
+        "error": error,
+    }
+
+
+@app.post("/api/sync-check")
+def sync_check():
+    """Poll silencioso desde el JS de cada pagina de /wiki/ (ver
+    theme_overrides/main.html): hace el mismo fetch+ff-merge que
+    Resincronizar pero sin pasar por /_admin, y solo reconstruye el sitio
+    si el HEAD realmente cambio -- asi el poll periodico no reconstruye
+    de a gratis cuando el repo ya estaba al dia."""
+    config = read_config()
+    active = get_active_repo(config)
+    if active is None:
+        return {"ok": True, "updated": False}
+    dest = repo_dir(active["id"])
+    before = _head_oid(dest)
+    token = keyring.get_password(KEYRING_SERVICE, token_key(active["id"]))
+    ok, _ = run_sync(active["repo_url"], token, dest)
+    updated = ok and _head_oid(dest) != before
+    if updated:
+        build_site(active["id"])
+        refresh_page_index(active["id"])
+    return {"ok": ok, "updated": updated}
+
+
+@app.post("/shutdown")
+def shutdown():
+    """Boton 'Salir' del shell/wiki: termina el proceso del backend --
+    unica otra forma de matarlo ademas de cerrar la ventana que lo
+    arranco (ver installer/*/launcher.py, `open_window()` solo mata el
+    backend si el sigue vivo y fue el mismo lanzador quien lo arranco).
+    SIGTERM en un hilo aparte, con un respiro breve, para que uvicorn
+    alcance a mandar esta respuesta 200 antes de que el shutdown
+    interrumpa la conexion."""
+    def _stop():
+        time.sleep(0.3)
+        os.kill(os.getpid(), signal.SIGTERM)
+    threading.Thread(target=_stop, daemon=True).start()
+    return {"ok": True}
 
 
 @app.post("/disconnect/{repo_id}")
 def disconnect(repo_id: str):
     config = read_config()
-    if get_repo(config, repo_id) is None:
+    repo = get_repo(config, repo_id)
+    if repo is None:
         return RedirectResponse("/_admin", status_code=303)
+
+    is_custom = bool(repo.get("custom_path"))
+    dest = Path(repo["custom_path"]) if is_custom else REPOS_DIR / repo_id
 
     config["repos"] = [r for r in config["repos"] if r["id"] != repo_id]
     if config["active_id"] == repo_id:
@@ -634,11 +867,16 @@ def disconnect(repo_id: str):
         keyring.delete_password(KEYRING_SERVICE, token_key(repo_id))
     except keyring.errors.PasswordDeleteError:
         pass
-    # Se borra para que una futura reconexion a esta URL parta de un
-    # `clone` limpio -- un `pull` contra un remoto distinto fallaria
-    # (historias no relacionadas). El sitio construido se borra junto con
-    # el clon -- sin el clon no hay como reconstruirlo si algo lo pidiera.
-    shutil.rmtree(REPOS_DIR / repo_id, ignore_errors=True)
+    # El sitio construido siempre se borra (lo gestiona MARC, sin el clon
+    # no hay como reconstruirlo si algo lo pidiera). El CLON en si solo se
+    # borra si vivia en la carpeta interna de MARC -- para que una futura
+    # reconexion a esta URL parta de un `clone` limpio (un `pull` contra un
+    # remoto distinto fallaria, historias no relacionadas). Si el usuario
+    # eligio la carpeta el mismo (`custom_path`), nunca se borra al
+    # desconectar: es su carpeta, el decide si borrarla o seguir usandola
+    # con otra herramienta (ver connect()).
+    if not is_custom:
+        shutil.rmtree(dest, ignore_errors=True)
     shutil.rmtree(SITES_DIR / repo_id, ignore_errors=True)
 
     PAGE_INDEX.pop(repo_id, None)
@@ -664,29 +902,9 @@ def hub(request: Request):
     no se muestra pagina por pagina aqui, pero sigue alimentando el
     conteo de paginas de cada tarjeta y el texto que el buscador filtra
     (asi "arquitectura" encuentra el repo aunque el nombre del repo no
-    la mencione, porque alguna de sus paginas si)."""
-    config = read_config()
-    repos = []
-    for r in config["repos"]:
-        name = repo_display_name(r["repo_url"])
-        pages = PAGE_INDEX.get(r["id"], [])
-        search_blob = " ".join([name] + [p["title"] for p in pages]).lower()
-        repos.append(
-            {
-                **r,
-                "name": name,
-                "owner": repo_owner(r["repo_url"]),
-                "badge": badge_class(r["id"]),
-                "page_count": len(pages),
-                "last_update": relative_date(cached_last_update(r["id"])),
-                "search": search_blob,
-            }
-        )
-    return templates.TemplateResponse(
-        request,
-        "hub.html",
-        {"repos": repos, "active_id": config["active_id"]},
-    )
+    la mencione, porque alguna de sus paginas si). El modal de
+    Repositorios viaja incrustado (ver render_hub()) pero cerrado."""
+    return render_hub(request, read_config())
 
 
 # La documentacion de uso se sincroniza a lo mucho una vez por corrida

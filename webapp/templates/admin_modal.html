@@ -1,0 +1,487 @@
+{% import "icons.html" as icons %}
+<div class="admin-overlay" id="admin-overlay" onclick="if (event.target === this) closeAdminModal();">
+  <div class="admin-modal" role="dialog" aria-modal="true" aria-label="Repositorios">
+    <header class="admin-modal-head">
+      <h2>Repositorios</h2>
+      <button type="button" class="admin-close" aria-label="Cerrar" onclick="closeAdminModal();">{{ icons.close() }}</button>
+    </header>
+
+    <div class="admin-modal-body">
+      {% if sync_message %}
+        <div class="banner {{ 'ok' if sync_ok else 'error' }}">{{ sync_message }}</div>
+      {% endif %}
+
+      {% if repos %}
+        <section class="panel">
+          <h3 class="panel-title">Tus repositorios</h3>
+          {% for repo in repos %}
+            <div class="repo-row {{ 'active' if repo.id == active_id else '' }}">
+              {{ icons.github() }}
+              <span class="repo-row-url">{{ repo.repo_url }}</span>
+              {% if repo.id == active_id %}
+                <span class="status-pill status-active">{{ icons.check() }} activo</span>
+              {% else %}
+                <span class="status-pill status-inactive">desactivado</span>
+              {% endif %}
+              <a class="row-action" href="/_admin?edit={{ repo.id }}#connect-form">{{ icons.edit() }} Editar</a>
+              <form method="post" action="/disconnect/{{ repo.id }}">
+                <button type="submit" class="row-action danger">{{ icons.trash() }} Quitar</button>
+              </form>
+            </div>
+            <p class="repo-row-path" title="Carpeta local de este repositorio">{{ repo.path }}</p>
+            {% if repo.id == active_id %}
+              <a class="button-block" href="/wiki">Ir a la wiki {{ icons.arrow_right() }}</a>
+              <form method="post" action="/resync">
+                <button type="submit" class="button-block secondary">{{ icons.refresh() }} Resincronizar repositorio activo</button>
+              </form>
+            {% endif %}
+          {% endfor %}
+        </section>
+      {% endif %}
+
+      <section class="panel" id="connect-form">
+        <h3 class="panel-title">
+          {% if editing_id %}Editar repositorio{% elif repos %}Conectar otro repositorio{% else %}Conectar repositorio{% endif %}
+        </h3>
+
+        {% if error %}
+          <div class="banner error">{{ error }}</div>
+        {% endif %}
+
+        <form method="post" action="/connect" class="connect-form">
+          <label for="repo_url">URL del repositorio (GitHub)</label>
+          <div class="input-icon">
+            {{ icons.github() }}
+            <input type="text" id="repo_url" name="repo_url" placeholder="https://github.com/tu-equipo/wiki.git" value="{{ repo_url }}" required>
+          </div>
+
+          <label for="token">Personal Access Token <span class="badge">opcional — solo repos privados</span></label>
+          <input type="password" id="token" name="token" placeholder="ghp_...">
+          <p class="hint">El token se guarda cifrado en el llavero del sistema operativo, nunca en texto plano.</p>
+
+          <details class="advanced-options" {{ 'open' if custom_path else '' }}>
+            <summary>Opciones avanzadas</summary>
+            <label for="custom_path">Carpeta local <span class="badge">opcional</span></label>
+            <div class="input-with-button">
+              <input type="text" id="custom_path" name="custom_path" placeholder="Ej. {{ custom_path_example }}" value="{{ custom_path }}">
+              <button type="button" class="pick-folder-btn" onclick="openBrowseModal(document.getElementById('custom_path').value)">{{ icons.folder() }} Elegir carpeta…</button>
+            </div>
+            <p class="hint">Úsala si tú mismo quieres leer o versionar estos archivos con otras herramientas (ej. apuntar tu agente de código ahí). Sin elegir ninguna, MARC la clona en su carpeta interna.</p>
+          </details>
+
+          <button type="submit" class="button-block">{{ 'Guardar cambios' if editing_id else 'Conectar' }}</button>
+        </form>
+      </section>
+    </div>
+  </div>
+</div>
+
+<div class="browse-overlay" id="browse-overlay" onclick="if (event.target === this) closeBrowseModal();">
+  <div class="browse-modal" role="dialog" aria-modal="true" aria-label="Elegir carpeta">
+    <header class="browse-head">
+      <h3>Elegir carpeta</h3>
+      <button type="button" class="admin-close" aria-label="Cerrar" onclick="closeBrowseModal();">{{ icons.close() }}</button>
+    </header>
+    <div class="browse-current" id="browse-current" title=""></div>
+    <div class="browse-list" id="browse-list"></div>
+    <footer class="browse-foot">
+      <button type="button" class="browse-btn" onclick="closeBrowseModal();">Cancelar</button>
+      <button type="button" class="browse-btn primary" onclick="confirmBrowse();">Usar esta carpeta</button>
+    </footer>
+  </div>
+</div>
+
+<style>
+  .admin-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3vh 1rem;
+    background: rgba(10, 10, 14, 0.35);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.16s ease;
+  }
+  .admin-overlay.open { opacity: 1; pointer-events: auto; }
+  .admin-modal {
+    display: flex;
+    flex-direction: column;
+    width: min(700px, 94vw);
+    max-height: min(86vh, 780px);
+    border-radius: 20px;
+    color: var(--text);
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.32);
+    backdrop-filter: blur(28px) saturate(180%);
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    transform: scale(0.96) translateY(6px);
+    transition: transform 0.16s ease;
+  }
+  .admin-overlay.open .admin-modal { transform: scale(1) translateY(0); }
+  .admin-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.1rem 1.3rem;
+    border-bottom: 1px solid var(--glass-border);
+    flex-shrink: 0;
+  }
+  .admin-modal-head h2 { margin: 0; font-size: 1.05rem; font-weight: 700; letter-spacing: -0.01em; }
+  .admin-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.9rem;
+    height: 1.9rem;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .admin-close:hover { background: rgba(128, 128, 128, 0.18); color: var(--text); }
+  .admin-modal-body { overflow-y: auto; padding: 1.2rem 1.3rem 1.5rem; }
+
+  .panel { margin-bottom: 1.6rem; }
+  .panel:last-child { margin-bottom: 0; }
+  .panel-title { font-size: 0.95rem; margin: 0 0 0.75rem; }
+  .banner { padding: 0.7rem 0.9rem; border-radius: 8px; font-size: 0.85rem; margin-bottom: 1rem; }
+  .banner.error { background: var(--error-bg); color: var(--error-text); white-space: pre-wrap; }
+  .banner.ok { background: var(--ok-bg); color: var(--ok-text); }
+
+  .repo-row {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.75rem 0.9rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 0.5rem;
+  }
+  .repo-row.active { border-color: var(--accent); }
+  .repo-row .icon { color: var(--text-muted); flex-shrink: 0; }
+  .repo-row-url { flex: 1; font-family: ui-monospace, monospace; font-size: 0.8rem; overflow-wrap: anywhere; }
+  .repo-row-path {
+    margin: -0.3rem 0 0.5rem;
+    padding: 0 0.9rem;
+    font-family: ui-monospace, monospace;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+  }
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.72rem;
+    font-weight: 650;
+    padding: 0.22rem 0.55rem;
+    border-radius: 999px;
+    flex-shrink: 0;
+  }
+  .status-pill .icon { width: 0.85rem; height: 0.85rem; }
+  .status-active { background: var(--ok-bg); color: var(--ok-text); }
+  .status-inactive { background: var(--border); color: var(--text-muted); }
+  .row-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.4rem 0.7rem;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  a.row-action { text-decoration: none; }
+  .row-action:hover { background: var(--surface); border-color: var(--accent); color: var(--accent); }
+  .row-action.danger:hover { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
+  .repo-row-path + form,
+  .repo-row-path + a.button-block {
+    margin-bottom: 0.5rem;
+  }
+
+  .button-block {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.65rem 1rem;
+    background: var(--accent);
+    color: var(--accent-ink);
+    border: none;
+    border-radius: 9px;
+    font-size: 0.88rem;
+    font-weight: 650;
+    text-decoration: none;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .button-block.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+
+  .connect-form label { display: block; font-size: 0.8rem; color: var(--text-muted); margin: 0.9rem 0 0.35rem; }
+  .connect-form label:first-child { margin-top: 0; }
+  .connect-form .badge { font-size: 0.68rem; font-weight: 650; background: var(--border); color: var(--text-muted); padding: 0.12rem 0.45rem; border-radius: 999px; margin-left: 0.3rem; }
+  .connect-form input[type=text], .connect-form input[type=password] {
+    width: 100%;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.88rem;
+  }
+  .connect-form input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+  .input-icon { position: relative; display: flex; align-items: center; }
+  .input-icon .icon { position: absolute; left: 0.75rem; color: var(--text-muted); }
+  .input-icon input { padding-left: 2.1rem !important; }
+  .input-with-button { display: flex; gap: 0.5rem; }
+  .input-with-button input { flex: 1; min-width: 0; }
+  .pick-folder-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.6rem 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.83rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .pick-folder-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .pick-folder-btn:disabled { opacity: 0.6; cursor: default; }
+  .hint { font-size: 0.75rem; color: var(--text-muted); margin: 0.35rem 0 0; }
+  .connect-form .button-block { margin-top: 1.1rem; }
+
+  .advanced-options { margin-top: 0.9rem; }
+  .advanced-options summary { cursor: pointer; font-size: 0.8rem; color: var(--text-muted); font-weight: 600; }
+  .advanced-options summary::-webkit-details-marker { color: var(--text-muted); }
+  .advanced-options[open] summary { margin-bottom: 0.35rem; }
+  .advanced-options label { margin-top: 0.7rem !important; }
+
+  @media (max-width: 720px) {
+    .admin-overlay { padding: 0; }
+    .admin-modal { width: 100%; height: 100%; max-height: none; border-radius: 0; }
+  }
+
+  /* Explorador de carpetas: modal anidado, se abre encima del de
+     Repositorios (z-index mas alto) para elegir la carpeta custom sin
+     depender del selector nativo del sistema operativo -- ver
+     browse_fs() en server.py. */
+  .browse-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3vh 1rem;
+    background: rgba(10, 10, 14, 0.4);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.16s ease;
+  }
+  .browse-overlay.open { opacity: 1; pointer-events: auto; }
+  .browse-modal {
+    display: flex;
+    flex-direction: column;
+    width: min(560px, 92vw);
+    max-height: min(72vh, 620px);
+    border-radius: 18px;
+    color: var(--text);
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.32);
+    backdrop-filter: blur(28px) saturate(180%);
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    transform: scale(0.96) translateY(6px);
+    transition: transform 0.16s ease;
+  }
+  .browse-overlay.open .browse-modal { transform: scale(1) translateY(0); }
+  .browse-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.2rem;
+    border-bottom: 1px solid var(--glass-border);
+    flex-shrink: 0;
+  }
+  .browse-head h3 { margin: 0; font-size: 0.98rem; font-weight: 700; letter-spacing: -0.01em; }
+  .browse-current {
+    padding: 0.6rem 1.2rem;
+    font-family: ui-monospace, monospace;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--glass-border);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 0;
+  }
+  .browse-list { overflow-y: auto; flex: 1; padding: 0.5rem; }
+  .browse-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    width: 100%;
+    padding: 0.55rem 0.7rem;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text);
+    font-size: 0.87rem;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .browse-row:hover { background: var(--surface); }
+  .browse-row .icon { color: var(--text-muted); flex-shrink: 0; }
+  .browse-empty, .browse-loading, .browse-error {
+    padding: 1.3rem;
+    text-align: center;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+  .browse-foot {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.6rem;
+    padding: 0.9rem 1.2rem;
+    border-top: 1px solid var(--glass-border);
+    flex-shrink: 0;
+  }
+  .browse-btn {
+    padding: 0.55rem 1.1rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 650;
+    cursor: pointer;
+    font-family: inherit;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+  }
+  .browse-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .browse-btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .browse-btn.primary:hover { color: var(--accent-ink); opacity: 0.9; }
+
+  @media (max-width: 720px) {
+    .browse-overlay { padding: 0; }
+    .browse-modal { width: 100%; height: 100%; max-height: none; border-radius: 0; }
+  }
+</style>
+
+<script>
+  function openAdminModal() {
+    var el = document.getElementById('admin-overlay');
+    if (el) el.classList.add('open');
+  }
+  function closeAdminModal() {
+    var el = document.getElementById('admin-overlay');
+    if (el) el.classList.remove('open');
+  }
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    // El explorador de carpetas se abre encima del de Repositorios --
+    // Escape cierra solo el que esta arriba, no ambos de un tiron.
+    var browseEl = document.getElementById('browse-overlay');
+    if (browseEl && browseEl.classList.contains('open')) {
+      closeBrowseModal();
+      return;
+    }
+    closeAdminModal();
+  });
+
+  var FOLDER_ROW_ICON = '<svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5.3a1 1 0 0 1 1-1h4l1.6 1.8h7.4a1 1 0 0 1 1 1v8.1a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1z"/></svg>';
+  var UP_ROW_ICON = '<svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15.5V5M5.5 9.5 10 5l4.5 4.5"/></svg>';
+  var browseCurrentPath = '';
+
+  function openBrowseModal(startPath) {
+    var el = document.getElementById('browse-overlay');
+    if (el) el.classList.add('open');
+    loadBrowseDir(startPath || '');
+  }
+  function closeBrowseModal() {
+    var el = document.getElementById('browse-overlay');
+    if (el) el.classList.remove('open');
+  }
+  function loadBrowseDir(path) {
+    var list = document.getElementById('browse-list');
+    list.innerHTML = '<p class="browse-loading">Cargando…</p>';
+    fetch('/api/browse-fs?path=' + encodeURIComponent(path))
+      .then(function (r) { return r.json(); })
+      .then(renderBrowseDir)
+      .catch(function () {
+        list.innerHTML = '<p class="browse-error">No se pudo leer esa carpeta.</p>';
+      });
+  }
+  // Fila de la lista armada con DOM (no innerHTML) para el nombre: son
+  // nombres reales de carpetas del filesystem, no texto de confianza --
+  // con innerHTML una carpeta llamada por ej. "<img src=x onerror=...>"
+  // ejecutaria como HTML en vez de mostrarse como texto.
+  function makeBrowseRow(iconHtml, label, onClick) {
+    var row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'browse-row';
+    var iconWrap = document.createElement('span');
+    iconWrap.innerHTML = iconHtml;
+    row.appendChild(iconWrap.firstChild);
+    row.appendChild(document.createTextNode(' ' + label));
+    row.onclick = onClick;
+    return row;
+  }
+  function renderBrowseDir(data) {
+    browseCurrentPath = data.path;
+    var current = document.getElementById('browse-current');
+    current.textContent = data.path;
+    current.title = data.path;
+
+    var list = document.getElementById('browse-list');
+    list.innerHTML = '';
+
+    if (data.parent !== null) {
+      list.appendChild(makeBrowseRow(UP_ROW_ICON, '..', function () { loadBrowseDir(data.parent); }));
+    }
+
+    if (data.error) {
+      var err = document.createElement('p');
+      err.className = 'browse-error';
+      err.textContent = data.error;
+      list.appendChild(err);
+      return;
+    }
+
+    if (data.dirs.length === 0 && data.parent === null) {
+      var empty = document.createElement('p');
+      empty.className = 'browse-empty';
+      empty.textContent = 'Esta carpeta no tiene subcarpetas.';
+      list.appendChild(empty);
+    }
+
+    data.dirs.forEach(function (dir) {
+      list.appendChild(makeBrowseRow(FOLDER_ROW_ICON, dir.name, function () { loadBrowseDir(dir.path); }));
+    });
+  }
+  function confirmBrowse() {
+    var input = document.getElementById('custom_path');
+    if (input) input.value = browseCurrentPath;
+    closeBrowseModal();
+  }
+  {% if admin_open %}
+  document.addEventListener('DOMContentLoaded', openAdminModal);
+  {% endif %}
+</script>

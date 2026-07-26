@@ -4,7 +4,14 @@
 
 Unicode true
 
-!define VERSION "1.0.2"
+; VERSION se define en version.nsh, generado por build.sh a partir del
+; VERSION de la raiz del proyecto -- misma fuente unica que ya usa
+; installer/linux/build-deb.sh (VERSION="$(cat VERSION)") y que lee
+; webapp/server.py en runtime (APP_VERSION). No compilar este .nsi a mano
+; con makensis directo: sin version.nsh (gitignored, no versionado) el
+; include de abajo falla -- correr installer/windows/build.sh, que lo
+; genera y despues invoca makensis.
+!include "version.nsh"
 !define PRODUCT_NAME "MARC"
 !define PUBLISHER "Antonio Baeza"
 

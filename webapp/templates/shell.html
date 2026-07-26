@@ -375,11 +375,13 @@
       </a>
       {% block search %}{% endblock %}
       {% include "theme_toggle.html" %}
+      {% include "exit_button.html" %}
     </header>
     <aside class="sidebar">{% block sidebar %}{% endblock %}</aside>
     <main class="content">{% block content %}{% endblock %}</main>
   </div>
   {% include "about_modal.html" %}
+  {% include "admin_modal.html" %}
   {% block scripts %}{% endblock %}
 </body>
 </html>

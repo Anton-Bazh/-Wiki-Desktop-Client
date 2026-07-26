@@ -45,19 +45,30 @@ theme:
 # ver frontend/README.md) -- monta/limpia las graficas de los bloques
 # ```chart y renderiza las formulas de pymdownx.arithmatex en cada
 # navegacion, ver su docstring para el porque.
+# marc-flow.js es codigo propio aparte (fuente frontend/src/marc-flow.tsx)
+# -- monta/limpia los diagramas arrastrables de los bloques ```flow.
+# Mermaid sigue siendo el diagrama por defecto sin tocar; ```flow es solo
+# para los casos puntuales donde de verdad hace falta mover nodos con el
+# mouse. A diferencia de marc-interactive.ts, este si empaqueta
+# dependencias reales de node_modules (React + @xyflow/react, que no
+# ofrecen build UMD) -- por eso se compila con esbuild en vez de tsc puro,
+# ver frontend/package.json.
 extra_javascript:
   - vendor/mermaid.min.js
   - vendor/chart.min.js
   - vendor/katex/katex.min.js
   - vendor/marc-interactive.js
+  - vendor/marc-flow.js
 
 # extra.css vive en theme_overrides/ (el custom_dir) -- MkDocs copia sus
 # archivos junto con los del tema base automaticamente, sin necesitar un
 # hook propio como el de branding/vendor (que viven fuera de custom_dir).
-# katex.min.css si necesita el hook (vive en vendor/, no en custom_dir).
+# katex.min.css y marc-flow.css si necesitan el hook (viven en vendor/, no
+# en custom_dir).
 extra_css:
   - extra.css
   - vendor/katex/katex.min.css
+  - vendor/marc-flow.css
 
 markdown_extensions:
   - admonition
@@ -82,6 +93,9 @@ markdown_extensions:
           format: !!python/name:pymdownx.superfences.fence_code_format
         - name: chart
           class: chart-block
+          format: !!python/name:pymdownx.superfences.fence_code_format
+        - name: flow
+          class: flow-block
           format: !!python/name:pymdownx.superfences.fence_code_format
   - attr_list
   - tables

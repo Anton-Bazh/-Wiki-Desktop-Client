@@ -97,3 +97,126 @@ html:has(body[data-md-color-scheme="slate"]) {
   color: inherit;
   opacity: 0.6;
 }
+
+/* Contenedor de los diagramas arrastrables (bloque ```flow, ver
+   frontend/src/marc-flow.tsx) -- React Flow necesita un padre con
+   dimensiones explicitas, si no renderiza a altura 0. */
+.marc-flow-container {
+  height: 640px;
+  border: 1px solid #dcdcdc;
+  border-radius: 4px;
+}
+[data-md-color-scheme="slate"] .marc-flow-container {
+  border-color: #262832;
+}
+
+/* Material aplica max-width:100% a TODO svg dentro de .md-typeset (pensado
+   para imagenes/iconos sueltos en el texto). React Flow dibuja sus aristas
+   en un <svg> con position:absolute y sin CSS width propio (solo el
+   atributo, ver vendor/marc-flow.css .react-flow__edges svg) -- ese
+   max-width lo fuerza a shrink-to-fit, y sin left/right definidos eso
+   colapsa a 0: las aristas quedan invisibles aunque los nodos se vean
+   bien. Se anula solo dentro del diagrama, sin tocar el resto de la wiki. */
+.marc-flow-container svg {
+  max-width: none;
+}
+
+/* Boton "ver en grande" (Panel top-right dentro del <ReactFlow> inline, ver
+   marc-flow.tsx) -- mismas medidas/estilo que los botones de
+   .react-flow__controls-button para que se vea coherente con el resto de
+   los controles del diagrama, aunque viva fuera de ese grupo. */
+.marc-flow-expand-btn {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 4px;
+  border: 1px solid #dcdcdc;
+  border-radius: 4px;
+  background: #fff;
+  color: #333;
+  cursor: pointer;
+}
+.marc-flow-expand-btn:hover {
+  background: #f2f2f2;
+}
+.marc-flow-expand-btn svg {
+  width: 100%;
+  height: 100%;
+}
+[data-md-color-scheme="slate"] .marc-flow-expand-btn {
+  border-color: #262832;
+  background: #2b2e38;
+  color: #e8e8ec;
+}
+[data-md-color-scheme="slate"] .marc-flow-expand-btn:hover {
+  background: #363a46;
+}
+
+/* Modal grande de los diagramas ```flow -- mismo glassmorphism que ya usa
+   el modal "Acerca de" (theme_overrides/partials/header.html): reusa las
+   mismas variables --wdc-glass-bg/--wdc-glass-border definidas ahi, en vez
+   de inventar un estilo nuevo. Renderizado via createPortal a document.body
+   (marc-flow.tsx), por eso vive fuera de .marc-flow-container.
+   z-index 1000: el mismo valor que .about-overlay/.admin-overlay -- el
+   header de Material solo usa z-index:4, cualquier valor de esta familia
+   ya queda por encima. */
+.marc-flow-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.marc-flow-modal-panel {
+  position: relative;
+  width: 92vw;
+  height: 92vh;
+  border-radius: 22px;
+  background: var(--wdc-glass-bg);
+  border: 1px solid var(--wdc-glass-border);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  padding: 16px;
+  overflow: hidden;
+}
+.marc-flow-modal-panel .react-flow {
+  border-radius: 12px;
+  overflow: hidden;
+}
+/* Adentro del panel (no con offset negativo sobresaliendo del borde, como
+   se intento primero) -- ese overhang quedaba recortado por el viewport
+   o por el propio overflow:hidden del panel segun la altura de ventana,
+   ver commit que corrige el bug. Mismo look flotante que el boton
+   "ver en grande" del diagrama inline (Panel top-right dentro del
+   <ReactFlow>), solo que aqui vive fuera del <ReactFlow> por eso necesita
+   su propio z-index encima del canvas. */
+.marc-flow-modal-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--wdc-glass-border);
+  background: var(--wdc-glass-bg);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  color: #333;
+  cursor: pointer;
+}
+[data-md-color-scheme="slate"] .marc-flow-modal-close {
+  color: #e8e8ec;
+}
+.marc-flow-modal-close svg {
+  width: 16px;
+  height: 16px;
+}
