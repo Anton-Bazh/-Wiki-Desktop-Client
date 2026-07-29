@@ -38,7 +38,9 @@ def on_config(config, **kwargs):
             active_id = data.get("active_id")
             repo = next((r for r in data.get("repos", []) if r["id"] == active_id), None)
             if repo:
-                name = _repo_display_name(repo["repo_url"])
+                # Un repo local (ver connect_local() en webapp/server.py)
+                # no tiene repo_url -- su nombre es el de la carpeta.
+                name = Path(repo["local_path"]).name if "local_path" in repo else _repo_display_name(repo["repo_url"])
         config.extra["active_repo_name"] = name
 
     version_path = PROJECT_ROOT / "VERSION"

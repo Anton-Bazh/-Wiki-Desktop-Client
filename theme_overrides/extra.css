@@ -20,6 +20,21 @@ html:has(body[data-md-color-scheme="slate"]) {
   background: #1e2129;
 }
 
+/* Material topa el grid completo (header y el nav+contenido+TOC de cada
+   pagina, misma clase .md-grid para los dos) en 61rem -- en un monitor
+   ancho eso deja franjas enormes sin usar a los lados (reportado por
+   Antonio con captura). Las columnas de nav/TOC (.md-sidebar) se dejan
+   tal cual: tienen su propio ancho fijo (12.1rem) ligado a un mecanismo
+   interno de Material para revelar navegacion anidada
+   (.md-sidebar__inner, padding calc(100% - 11.5rem)) que no viene en el
+   CSS fuente (solo el compilado) y no vale la pena arriesgar. El
+   contenido (.md-content, flex-grow:1) sí absorbe todo el espacio que se
+   libera -- en esta app eso ademas es una ganancia real, no solo estetica:
+   las graficas (Chart.js), diagramas (Mermaid/React Flow) y tablas del
+   contenido conectado ya llenan el 100% de esa columna, asi que ganan el
+   mismo ancho extra. */
+.md-grid { max-width: 80rem; }
+
 /* ---------------------------------------------------------------------
    Tema unificado con el shell de MARC (webapp/templates/shell.html):
    mismos colores de superficie, borde, texto y acento que el hub, para

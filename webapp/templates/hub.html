@@ -22,10 +22,10 @@
 
 {% macro card_body(repo) %}
   <span class="repo-card-head">
-    {{ icons.github() }}
+    {{ icons.folder() if repo.is_local else icons.github() }}
     <span class="repo-card-title">{{ repo.name }}</span>
   </span>
-  <span class="repo-card-owner">{{ repo.owner }}</span>
+  {% if repo.owner %}<span class="repo-card-owner">{{ repo.owner }}</span>{% endif %}
   <span class="repo-card-meta">
     {% if repo.id == active_id %}
       <span class="repo-card-active"><span class="dot dot-active"></span> activo</span>

@@ -16,14 +16,16 @@
           <h3 class="panel-title">Tus repositorios</h3>
           {% for repo in repos %}
             <div class="repo-row {{ 'active' if repo.id == active_id else '' }}">
-              {{ icons.github() }}
-              <span class="repo-row-url">{{ repo.repo_url }}</span>
+              {{ icons.folder() if repo.is_local else icons.github() }}
+              <span class="repo-row-url">{{ repo.name if repo.is_local else repo.repo_url }}</span>
               {% if repo.id == active_id %}
                 <span class="status-pill status-active">{{ icons.check() }} activo</span>
               {% else %}
                 <span class="status-pill status-inactive">desactivado</span>
               {% endif %}
-              <a class="row-action" href="/_admin?edit={{ repo.id }}#connect-form">{{ icons.edit() }} Editar</a>
+              {% if not repo.is_local %}
+                <a class="row-action" href="/_admin?edit={{ repo.id }}#connect-form">{{ icons.edit() }} Editar</a>
+              {% endif %}
               <form method="post" action="/disconnect/{{ repo.id }}">
                 <button type="submit" class="row-action danger">{{ icons.trash() }} Quitar</button>
               </form>
@@ -32,7 +34,7 @@
             {% if repo.id == active_id %}
               <a class="button-block" href="/wiki">Ir a la wiki {{ icons.arrow_right() }}</a>
               <form method="post" action="/resync">
-                <button type="submit" class="button-block secondary">{{ icons.refresh() }} Resincronizar repositorio activo</button>
+                <button type="submit" class="button-block secondary">{{ icons.refresh() }} {{ 'Actualizar desde la carpeta' if repo.is_local else 'Resincronizar repositorio activo' }}</button>
               </form>
             {% endif %}
           {% endfor %}
@@ -48,7 +50,14 @@
           <div class="banner error">{{ error }}</div>
         {% endif %}
 
-        <form method="post" action="/connect" class="connect-form">
+        {% if not editing_id %}
+        <div class="source-tabs" role="tablist">
+          <button type="button" class="source-tab {{ '' if local_tab else 'active' }}" id="tab-github" onclick="switchSourceTab('github')">{{ icons.github() }} GitHub</button>
+          <button type="button" class="source-tab {{ 'active' if local_tab else '' }}" id="tab-local" onclick="switchSourceTab('local')">{{ icons.folder() }} Carpeta local</button>
+        </div>
+        {% endif %}
+
+        <form method="post" action="/connect" class="connect-form" id="github-form" {{ 'hidden' if (local_tab and not editing_id) else '' }}>
           <label for="repo_url">URL del repositorio (GitHub)</label>
           <div class="input-icon">
             {{ icons.github() }}
@@ -64,13 +73,26 @@
             <label for="custom_path">Carpeta local <span class="badge">opcional</span></label>
             <div class="input-with-button">
               <input type="text" id="custom_path" name="custom_path" placeholder="Ej. {{ custom_path_example }}" value="{{ custom_path }}">
-              <button type="button" class="pick-folder-btn" onclick="openBrowseModal(document.getElementById('custom_path').value)">{{ icons.folder() }} Elegir carpeta…</button>
+              <button type="button" class="pick-folder-btn" onclick="openBrowseModal(document.getElementById('custom_path').value, 'custom_path')">{{ icons.folder() }} Elegir carpeta…</button>
             </div>
             <p class="hint">Úsala si tú mismo quieres leer o versionar estos archivos con otras herramientas (ej. apuntar tu agente de código ahí). Sin elegir ninguna, MARC la clona en su carpeta interna.</p>
           </details>
 
           <button type="submit" class="button-block">{{ 'Guardar cambios' if editing_id else 'Conectar' }}</button>
         </form>
+
+        {% if not editing_id %}
+        <form method="post" action="/connect-local" class="connect-form" id="local-form" {{ '' if local_tab else 'hidden' }}>
+          <label for="local_path">Carpeta en este equipo</label>
+          <div class="input-with-button">
+            <input type="text" id="local_path" name="local_path" placeholder="Ej. {{ custom_path_example }}" value="{{ local_path }}" required>
+            <button type="button" class="pick-folder-btn" onclick="openBrowseModal(document.getElementById('local_path').value, 'local_path')">{{ icons.folder() }} Elegir carpeta…</button>
+          </div>
+          <p class="hint">MARC lee esta carpeta tal cual, sin ninguna URL de GitHub — tenga o no su propio control de versiones adentro (si tiene <code>.git</code>, MARC solo lo aprovecha para mostrar la fecha del último commit; nunca hace push, pull ni fetch sobre él). Úsala para wikis que solo vives en esta máquina, o que versionas con otra herramienta.</p>
+
+          <button type="submit" class="button-block">Conectar carpeta</button>
+        </form>
+        {% endif %}
       </section>
     </div>
   </div>
@@ -267,6 +289,24 @@
   .hint { font-size: 0.75rem; color: var(--text-muted); margin: 0.35rem 0 0; }
   .connect-form .button-block { margin-top: 1.1rem; }
 
+  .source-tabs { display: flex; gap: 0.4rem; margin-bottom: 1rem; }
+  .source-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.85rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.83rem;
+    font-weight: 650;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .source-tab:hover { color: var(--text); border-color: var(--accent); }
+  .source-tab.active { background: var(--surface); color: var(--text); border-color: var(--accent); }
+
   .advanced-options { margin-top: 0.9rem; }
   .advanced-options summary { cursor: pointer; font-size: 0.8rem; color: var(--text-muted); font-weight: 600; }
   .advanced-options summary::-webkit-details-marker { color: var(--text-muted); }
@@ -409,8 +449,13 @@
   var FOLDER_ROW_ICON = '<svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5.3a1 1 0 0 1 1-1h4l1.6 1.8h7.4a1 1 0 0 1 1 1v8.1a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1z"/></svg>';
   var UP_ROW_ICON = '<svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15.5V5M5.5 9.5 10 5l4.5 4.5"/></svg>';
   var browseCurrentPath = '';
+  // A cual input (custom_path del form de GitHub, o local_path del de
+  // carpeta local) escribe confirmBrowse() -- el mismo modal de
+  // explorador se reusa para los dos botones "Elegir carpeta...".
+  var browseTargetId = 'custom_path';
 
-  function openBrowseModal(startPath) {
+  function openBrowseModal(startPath, targetId) {
+    browseTargetId = targetId || 'custom_path';
     var el = document.getElementById('browse-overlay');
     if (el) el.classList.add('open');
     loadBrowseDir(startPath || '');
@@ -477,9 +522,24 @@
     });
   }
   function confirmBrowse() {
-    var input = document.getElementById('custom_path');
+    var input = document.getElementById(browseTargetId);
     if (input) input.value = browseCurrentPath;
     closeBrowseModal();
+  }
+  // Alterna entre el form de GitHub y el de carpeta local -- mismo panel
+  // "Conectar repositorio", solo cambia la fuente. Nunca se ven los dos
+  // formularios llenos a la vez (evita mandar campos de sobra al submit).
+  function switchSourceTab(which) {
+    var githubForm = document.getElementById('github-form');
+    var localForm = document.getElementById('local-form');
+    var githubTab = document.getElementById('tab-github');
+    var localTab = document.getElementById('tab-local');
+    if (!githubForm || !localForm) return;
+    var showLocal = which === 'local';
+    githubForm.hidden = showLocal;
+    localForm.hidden = !showLocal;
+    if (githubTab) githubTab.classList.toggle('active', !showLocal);
+    if (localTab) localTab.classList.toggle('active', showLocal);
   }
   {% if admin_open %}
   document.addEventListener('DOMContentLoaded', openAdminModal);

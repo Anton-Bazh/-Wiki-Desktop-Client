@@ -15,8 +15,8 @@
 {% endif %}
 <header class="{{ class }}" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="{{ lang.t('header') }}">
-    <a href="#" onclick="event.preventDefault(); history.back();" title="Atrás" aria-label="Atrás" class="md-header__button md-icon">
-      <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+    <a href="#" onclick="event.preventDefault(); history.back();" title="Atrás" aria-label="Atrás" class="wdc-icon-btn">
+      <svg class="icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
     </a>
     {#- Logo por esquema en vez de partials/logo.html (config.theme.logo
         fija uno solo, el blanco, que con el header ya no indigo seria
@@ -48,27 +48,56 @@
         </div>
       </div>
     </div>
-    <a href="/_admin" title="Repositorios" aria-label="Repositorios" class="md-header__button md-icon">
-      <svg viewBox="0 0 24 24" width="24" height="24">
-        <circle cx="6" cy="6" r="2.3" style="fill:currentColor"/>
-        <circle cx="6" cy="18" r="2.3" style="fill:currentColor"/>
-        <circle cx="18" cy="12" r="2.3" style="fill:currentColor"/>
-        <path d="M6 8.3v7.4M7.7 7C11 8 13.8 9.6 16.1 10.6" style="fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round"/>
+    {#-
+      Antes: tres iconos sueltos de peso visual identico (Repositorios /
+      Acerca de / Salir) sin nada que dijera cual es cual salvo el
+      tooltip al pasar el mouse. Repensado, no solo repintado:
+
+      1. "Repositorios" deja de ser un icono misterioso y pasa a ser un
+         selector que MUESTRA el repo activo (config.extra.active_repo_name,
+         ya calculado por build_site()/expose_active_repo.py para el
+         breadcrumb -- se reusa el mismo dato, cero costo nuevo). Ya no
+         hay que adivinar que hace el boton: dice en que wiki estas
+         parado, y ese mismo texto invita a hacerle clic para cambiar.
+      2. "Acerca de" y "Salir" son las dos acciones de baja frecuencia
+         (una informativa, otra de ciclo de vida de la app, ninguna
+         de navegacion) -- se agrupan en un menu "mas opciones" con
+         ITEMS DE TEXTO, no iconos sueltos: el texto elimina cualquier
+         ambiguedad de icono, y sacarlas del primer nivel deja el
+         header con una sola cosa que decidir (el switcher) en vez de
+         tres botones compitiendo por atencion.
+    -#}
+    <a href="/_admin" title="Repositorios — cambiar o conectar wikis" class="wdc-repo-switch">
+      <svg class="icon" viewBox="0 0 24 24">
+        <path d="M12 3.3 3 7.6l9 4.3 9-4.3-9-4.3z" style="fill:none;stroke:currentColor;stroke-width:1.7;stroke-linejoin:round"/>
+        <path d="M6.3 10 3 11.6l9 4.3 9-4.3-3.3-1.6" style="fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round"/>
+        <path d="M6.3 14.1 3 15.7l9 4.3 9-4.3-3.3-1.6" style="fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round"/>
       </svg>
+      <span class="wdc-repo-switch-name">{{ config.extra.active_repo_name or "Repositorios" }}</span>
+      <svg class="icon wdc-chevron" viewBox="0 0 20 20"><path d="M5.5 8l4.5 4.5L14.5 8" style="fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round"/></svg>
     </a>
-    <a href="#" onclick="event.preventDefault(); openAboutModal();" title="Acerca de" aria-label="Acerca de" class="md-header__button md-icon">
-      <svg viewBox="0 0 24 24" width="24" height="24">
-        <circle cx="12" cy="12" r="8.6" style="fill:none;stroke:currentColor;stroke-width:1.8"/>
-        <path d="M12 11v5.2" style="fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round"/>
-        <circle cx="12" cy="7.8" r="1" style="fill:currentColor"/>
-      </svg>
-    </a>
-    <a href="#" onclick="event.preventDefault(); marcExit();" title="Salir (detiene el servidor local)" aria-label="Salir de MARC" class="md-header__button md-icon">
-      <svg viewBox="0 0 24 24" width="24" height="24">
-        <path d="M12 4v7.2" style="fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round"/>
-        <path d="M16.9 6.4a7.4 7.4 0 1 1-9.8 0" style="fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round"/>
-      </svg>
-    </a>
+    <div class="wdc-more">
+      <button type="button" class="wdc-icon-btn" title="Más opciones" aria-label="Más opciones" aria-haspopup="true" aria-expanded="false" id="wdc-more-btn" onclick="event.preventDefault(); toggleMoreMenu();">
+        <svg class="icon" viewBox="0 0 20 20"><circle cx="4" cy="10" r="1.6" fill="currentColor"/><circle cx="10" cy="10" r="1.6" fill="currentColor"/><circle cx="16" cy="10" r="1.6" fill="currentColor"/></svg>
+      </button>
+      <div class="wdc-more-menu" id="wdc-more-menu" role="menu">
+        <a href="#" role="menuitem" class="wdc-more-item" onclick="event.preventDefault(); closeMoreMenu(); openAboutModal();">
+          <svg class="icon" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="8.6" style="fill:none;stroke:currentColor;stroke-width:1.8"/>
+            <path d="M12 11v5.2" style="fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round"/>
+            <circle cx="12" cy="7.8" r="1" style="fill:currentColor"/>
+          </svg>
+          Acerca de MARC
+        </a>
+        <a href="#" role="menuitem" class="wdc-more-item wdc-more-item--danger" onclick="event.preventDefault(); closeMoreMenu(); marcExit();">
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M12 4v7.2" style="fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round"/>
+            <path d="M16.9 6.4a7.4 7.4 0 1 1-9.8 0" style="fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round"/>
+          </svg>
+          Salir de MARC
+        </a>
+      </div>
+    </div>
     {% if config.theme.palette %}
       {% if not config.theme.palette is mapping %}
         {% include "partials/palette.html" %}
@@ -207,6 +236,111 @@
 
   /* El restyle del buscador vive ahora en extra.css junto con la piel
      del header (tema unificado con el shell). */
+
+  /* Botones propios del header (Atras, y el boton "mas opciones") --
+     mismas medidas/hover que .icon-btn del Hub (shell.html), para que el
+     header de la wiki se sienta parte de la misma app en vez del look
+     generico de un sitio MkDocs sin personalizar. */
+  .icon { width: 1.1rem; height: 1.1rem; flex-shrink: 0; }
+  .wdc-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.1rem;
+    height: 2.1rem;
+    border-radius: 8px;
+    color: var(--wdc-muted);
+    flex-shrink: 0;
+  }
+  .wdc-icon-btn:hover { color: var(--wdc-text); }
+  [data-md-color-scheme="default"] .wdc-icon-btn:hover { background: #e2e5eb; }
+  [data-md-color-scheme="slate"] .wdc-icon-btn:hover { background: #262832; }
+
+  /* Selector de repo activo -- reemplaza el icono mudo de "Repositorios":
+     este SI dice en que wiki estas (texto real, no un glifo a adivinar).
+     Mismo tono de superficie que .wdc-icon-btn en reposo (transparente
+     sobre el header) pero con borde propio para que se lea como un
+     control con estado, no como un boton mas de la fila. */
+  .wdc-repo-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    height: 2.1rem;
+    padding: 0 0.6rem;
+    margin: 0 0.3rem;
+    border-radius: 8px;
+    color: var(--wdc-text);
+    font-size: 0.8rem;
+    font-weight: 600;
+    max-width: 11rem;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+  [data-md-color-scheme="default"] .wdc-repo-switch { background: #ffffff; border: 1px solid #e2e5eb; }
+  [data-md-color-scheme="slate"] .wdc-repo-switch { background: #1a1c23; border: 1px solid #262832; }
+  .wdc-repo-switch:hover { border-color: var(--wdc-accent); color: var(--wdc-accent); }
+  .wdc-repo-switch .icon:first-child { color: var(--wdc-muted); flex-shrink: 0; }
+  .wdc-repo-switch:hover .icon:first-child { color: var(--wdc-accent); }
+  .wdc-repo-switch-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wdc-chevron { width: 0.85rem !important; height: 0.85rem !important; color: var(--wdc-muted); flex-shrink: 0; }
+
+  /* Menu "mas opciones" -- Acerca de/Salir ya no son iconos sueltos, son
+     renglones con texto (ver comentario arriba del markup). Mismo
+     glassmorphism que el resto de los modales de MARC (about-modal,
+     admin-modal), a menor escala: no es un modal de pantalla completa,
+     es un menu de header comun, pero debe leerse de la misma familia
+     visual. */
+  .wdc-more { position: relative; flex-shrink: 0; }
+  .wdc-more-menu {
+    position: absolute;
+    top: calc(100% + 0.4rem);
+    right: 0;
+    min-width: 12rem;
+    padding: 0.35rem;
+    border-radius: 12px;
+    background: var(--wdc-glass-bg);
+    border: 1px solid var(--wdc-glass-border);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.24);
+    backdrop-filter: blur(28px) saturate(180%);
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    opacity: 0;
+    transform: translateY(-4px);
+    pointer-events: none;
+    transition: opacity 0.12s ease, transform 0.12s ease;
+    z-index: 6;
+  }
+  .wdc-more-menu.open { opacity: 1; transform: translateY(0); pointer-events: auto; }
+  .wdc-more-item {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.55rem 0.6rem;
+    border-radius: 8px;
+    color: var(--wdc-text);
+    font-size: 0.83rem;
+    font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .wdc-more-item .icon { color: var(--wdc-muted); flex-shrink: 0; }
+  [data-md-color-scheme="default"] .wdc-more-item:hover { background: rgba(0, 0, 0, 0.05); }
+  [data-md-color-scheme="slate"] .wdc-more-item:hover { background: rgba(255, 255, 255, 0.06); }
+  /* Salir es la unica de las dos que de verdad hace algo distinto (apaga
+     el servidor, no solo informa) -- tinte rojo consistente en icono y
+     texto, no solo al hover, para que se distinga de "Acerca de" incluso
+     antes de tocarla. */
+  .wdc-more-item--danger, .wdc-more-item--danger .icon { color: #dc2626; }
+  [data-md-color-scheme="slate"] .wdc-more-item--danger, [data-md-color-scheme="slate"] .wdc-more-item--danger .icon { color: #f87171; }
+  [data-md-color-scheme="default"] .wdc-more-item--danger:hover { background: rgba(220, 38, 38, 0.1); }
+  [data-md-color-scheme="slate"] .wdc-more-item--danger:hover { background: rgba(248, 113, 113, 0.12); }
+
+  @media (max-width: 640px) {
+    /* Sin espacio para el nombre en pantallas chicas -- el selector se
+       reduce al icono solo, mismo criterio que .topbar-title (shell.html)
+       oculta el nombre de la app en el mismo breakpoint. */
+    .wdc-repo-switch-name, .wdc-chevron { display: none; }
+    .wdc-repo-switch { padding: 0; width: 2.1rem; justify-content: center; }
+  }
 </style>
 
 <script>
@@ -219,7 +353,32 @@
     if (el) el.classList.remove('open');
   }
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') closeAboutModal();
+    if (e.key === 'Escape') { closeAboutModal(); closeMoreMenu(); }
+  });
+
+  function toggleMoreMenu() {
+    var menu = document.getElementById('wdc-more-menu');
+    var btn = document.getElementById('wdc-more-btn');
+    if (!menu || !btn) return;
+    var willOpen = !menu.classList.contains('open');
+    menu.classList.toggle('open', willOpen);
+    btn.setAttribute('aria-expanded', String(willOpen));
+  }
+  function closeMoreMenu() {
+    var menu = document.getElementById('wdc-more-menu');
+    var btn = document.getElementById('wdc-more-btn');
+    if (menu) menu.classList.remove('open');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+  }
+  // Clic afuera del menu (pero no en el boton que lo abre, ya tiene su
+  // propio toggle) lo cierra -- mismo patron que los overlays de modal,
+  // sin necesitar un overlay de pantalla completa para un menu chico.
+  document.addEventListener('click', function (e) {
+    var wrap = document.getElementById('wdc-more-btn');
+    var menu = document.getElementById('wdc-more-menu');
+    if (!wrap || !menu || !menu.classList.contains('open')) return;
+    if (wrap.contains(e.target) || menu.contains(e.target)) return;
+    closeMoreMenu();
   });
 
   function marcExit() {

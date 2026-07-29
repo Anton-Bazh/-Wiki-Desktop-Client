@@ -35,6 +35,7 @@ URL del proceso, para no dejarlas visibles en la lista de procesos
 (`ps`) de la maquina.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -142,6 +143,12 @@ if PAGE_INDEX_PATH.exists():
 # cuando el repo realmente se sincroniza.
 LAST_UPDATE: dict[str, str | None] = {}
 
+# Ultima huella conocida (ver _dir_fingerprint) de cada repo local,
+# poblada junto con PAGE_INDEX (ver refresh_page_index) -- sync_check()
+# la compara contra la huella actual para saber si la carpeta cambio en
+# disco desde la ultima vez que se construyo, sin necesitar git.
+LOCAL_FINGERPRINT: dict[str, str] = {}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -152,7 +159,7 @@ async def lifespan(app: FastAPI):
     global startup_sync
     config = read_config()
     active = get_active_repo(config)
-    if active is not None:
+    if active is not None and "local_path" not in active:
         token = keyring.get_password(KEYRING_SERVICE, token_key(active["id"]))
         dest = repo_dir(active["id"])
         ok, message = run_sync(active["repo_url"], token, dest)
@@ -167,6 +174,17 @@ async def lifespan(app: FastAPI):
     # Los demas repos ya estan clonados en disco -- indexarlos y
     # construirlos no necesita red, solo si todavia no se habia hecho.
     for repo in config["repos"]:
+        if "local_path" in repo:
+            # Una carpeta local puede haber cambiado mientras MARC no
+            # corria (el usuario la edita con sus propias herramientas,
+            # fuera del control de MARC) -- a diferencia de un repo de
+            # GitHub, que ya refleja fielmente el ultimo pull, aqui
+            # conviene reconstruir siempre al arrancar, no solo si falta
+            # el sitio (ensure_site_built() de abajo).
+            if repo_dir(repo["id"]).is_dir():
+                build_site(repo["id"])
+                refresh_page_index(repo["id"])
+            continue
         if repo["id"] not in PAGE_INDEX:
             refresh_page_index(repo["id"])
         ensure_site_built(repo["id"])
@@ -241,15 +259,86 @@ def get_repo(config: dict, repo_id: str) -> dict | None:
 
 
 def repo_dir(repo_id: str) -> Path:
-    """Carpeta donde vive el clon de `repo_id`: la ruta que el usuario haya
-    elegido al conectar (`custom_path`, ver connect()) o la interna de
-    REPOS_DIR si no eligio ninguna. Repos que no viven en config["repos"]
-    (ej. DOCS_REPO_URL, ver docs()) siempre caen al default -- nunca
-    tienen custom_path por diseno, asi que no hace falta distinguirlos
-    aqui."""
+    """Carpeta donde vive el contenido de `repo_id`: para un repo local
+    (`local_path`, ver connect_local()) es la carpeta del usuario tal
+    cual -- MARC nunca clona ahi, la lee directo. Para un repo de GitHub
+    es la ruta que el usuario haya elegido al conectar (`custom_path`, ver
+    connect()) o la interna de REPOS_DIR si no eligio ninguna. Repos que
+    no viven en config["repos"] (ej. DOCS_REPO_URL, ver docs()) siempre
+    caen al default -- nunca tienen custom_path/local_path por diseno,
+    asi que no hace falta distinguirlos aqui."""
     repo = get_repo(read_config(), repo_id)
+    if repo and "local_path" in repo:
+        return Path(repo["local_path"])
     custom = repo.get("custom_path") if repo else None
     return Path(custom) if custom else REPOS_DIR / repo_id
+
+
+def _repo_is_local(repo: dict | None) -> bool:
+    return bool(repo and "local_path" in repo)
+
+
+def _dest_ready(dest: Path, is_local: bool) -> bool:
+    """Si `dest` ya tiene contenido para construir: una carpeta local
+    siempre esta lista (es la carpeta real del usuario, MARC nunca la
+    clona) -- un repo de GitHub necesita que `run_sync()` ya haya
+    corrido (`.git` presente, la señal de que el clone se completo)."""
+    return dest.is_dir() if is_local else (dest / ".git").exists()
+
+
+def _local_repo_id(path: Path) -> str:
+    """id deterministico para una carpeta local: mismo criterio que
+    repo_id_for() con una URL de GitHub -- la MISMA carpeta produce
+    siempre el mismo id (reconectarla reactiva la entrada existente en
+    vez de duplicarla), y el hash evita colision entre carpetas de
+    nombre igual mismo en rutas distintas (ej. dos carpetas 'notas')."""
+    digest = hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:8]
+    return f"{_slugify(path.name)}-{digest}"
+
+
+def _path_collision(config: dict, repo_id: str, path: Path) -> bool:
+    """Si `path` ya es el destino en disco de OTRO repo conectado (local,
+    o de GitHub con/sin custom_path) -- compartir carpeta entre dos repos
+    los dejaria pisandose el contenido uno al otro."""
+    return any(
+        r["id"] != repo_id
+        and Path(r.get("local_path") or r.get("custom_path") or (REPOS_DIR / r["id"])) == path
+        for r in config["repos"]
+    )
+
+
+def _validate_external_path(path: Path) -> str | None:
+    """None si `path` es valida como carpeta gestionada por el usuario
+    (fuera de REPOS_DIR/SITES_DIR) -- si no, el mensaje de error a
+    mostrar. Regla compartida por connect() (custom_path) y
+    connect_local() (local_path): ninguna puede vivir dentro de la
+    carpeta interna de MARC, se pisaria con lo que MARC ya gestiona ahi."""
+    if path == REPOS_DIR or REPOS_DIR in path.parents or path == SITES_DIR or SITES_DIR in path.parents:
+        return "Elige una carpeta fuera de la carpeta interna de MARC."
+    return None
+
+
+def _dir_fingerprint(dest: Path) -> str:
+    """Huella barata del estado de una carpeta local: cuenta de archivos
+    + el mtime mas reciente entre todos (carpetas/archivos ocultos
+    aparte, mismo criterio que browse_fs()) -- para que sync_check() sepa
+    si hace falta reconstruir sin tener que leer/comparar el contenido
+    entero. No es criptografica, solo necesita cambiar cuando algo real
+    dentro de la carpeta cambia."""
+    latest = 0.0
+    count = 0
+    for root, dirnames, filenames in os.walk(dest):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        for name in filenames:
+            if name.startswith("."):
+                continue
+            try:
+                mtime = (Path(root) / name).stat().st_mtime
+            except OSError:
+                continue
+            count += 1
+            latest = max(latest, mtime)
+    return f"{count}:{latest}"
 
 
 def get_active_repo(config: dict) -> dict | None:
@@ -283,7 +372,9 @@ def build_site(repo_id: str) -> bool:
     fragil: aqui no hay ruta compartida "activa" que reapuntar, cada repo
     tiene su propia carpeta de salida fija."""
     dest = repo_dir(repo_id)
-    if not (dest / ".git").exists():
+    repo = get_repo(read_config(), repo_id)
+    is_local = _repo_is_local(repo)
+    if not _dest_ready(dest, is_local):
         return False
     # El nombre del breadcrumb (config.extra["active_repo_name"], ver
     # hooks/expose_active_repo.py) debe ser el de ESTE repo, no el del
@@ -294,11 +385,12 @@ def build_site(repo_id: str) -> bool:
     # esto, ambos casos heredaban el nombre del repo activo de
     # config.json, ajeno al contenido que en realidad se esta sirviendo.
     if DOCS_REPO_URL and repo_id == repo_id_for(DOCS_REPO_URL):
-        repo_url = DOCS_REPO_URL
+        display_name = repo_display_name(DOCS_REPO_URL)
+    elif is_local:
+        display_name = Path(repo["local_path"]).name
     else:
-        repo = get_repo(read_config(), repo_id)
         repo_url = repo["repo_url"] if repo else None
-    display_name = repo_display_name(repo_url) if repo_url else "wiki"
+        display_name = repo_display_name(repo_url) if repo_url else "wiki"
     try:
         config = mkdocs_load_config(
             str(PROJECT_ROOT / "mkdocs.yml"),
@@ -458,7 +550,7 @@ def build_page_index(repo_id: str) -> list[dict]:
     plugins activos (search, ezlinks, embed_file, callouts) depende de
     pasos posteriores a on_files/get_navigation para esto."""
     dest = repo_dir(repo_id)
-    if not (dest / ".git").exists():
+    if not _dest_ready(dest, _repo_is_local(get_repo(read_config(), repo_id))):
         return []
     with tempfile.TemporaryDirectory() as tmp:
         try:
@@ -483,6 +575,9 @@ def build_page_index(repo_id: str) -> list[dict]:
 def refresh_page_index(repo_id: str) -> None:
     PAGE_INDEX[repo_id] = build_page_index(repo_id)
     LAST_UPDATE[repo_id] = repo_last_update(repo_id)
+    repo = get_repo(read_config(), repo_id)
+    if _repo_is_local(repo):
+        LOCAL_FINGERPRINT[repo_id] = _dir_fingerprint(repo_dir(repo_id))
     PAGE_INDEX_PATH.write_text(json.dumps(PAGE_INDEX, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
@@ -527,9 +622,11 @@ def render_hub(
     config: dict,
     *,
     admin_open: bool = False,
+    local_tab: bool = False,
     error: str | None = None,
     repo_url_prefill: str = "",
     custom_path_prefill: str = "",
+    local_path_prefill: str = "",
     editing_id: str | None = None,
     sync_message: str | None = None,
     sync_ok: bool | None = None,
@@ -546,15 +643,17 @@ def render_hub(
     search) como las filas del modal (owner/path)."""
     repos = []
     for r in config["repos"]:
-        name = repo_display_name(r["repo_url"])
+        is_local = _repo_is_local(r)
+        name = Path(r["local_path"]).name if is_local else repo_display_name(r["repo_url"])
         pages = PAGE_INDEX.get(r["id"], [])
         search_blob = " ".join([name] + [p["title"] for p in pages]).lower()
         repos.append(
             {
                 **r,
                 "name": name,
-                "owner": repo_owner(r["repo_url"]),
-                "path": r.get("custom_path") or str(REPOS_DIR / r["id"]),
+                "is_local": is_local,
+                "owner": "" if is_local else repo_owner(r["repo_url"]),
+                "path": r["local_path"] if is_local else (r.get("custom_path") or str(REPOS_DIR / r["id"])),
                 "badge": badge_class(r["id"]),
                 "page_count": len(pages),
                 "last_update": relative_date(cached_last_update(r["id"])),
@@ -568,13 +667,15 @@ def render_hub(
             "repos": repos,
             "active_id": config["active_id"],
             "admin_open": admin_open,
+            "local_tab": local_tab,
             "error": error,
             "repo_url": repo_url_prefill,
             "custom_path": custom_path_prefill,
-            # Placeholder del campo de carpeta custom: una ruta real de
-            # este sistema (no un texto generico), para que se lea de un
-            # vistazo como una ruta de archivos y no como un campo vacio
-            # cualquiera (ver admin_modal.html).
+            "local_path": local_path_prefill,
+            # Placeholder del campo de carpeta custom/local: una ruta real
+            # de este sistema (no un texto generico), para que se lea de
+            # un vistazo como una ruta de archivos y no como un campo
+            # vacio cualquiera (ver admin_modal.html).
             "custom_path_example": str(REPOS_DIR / "mi-repo"),
             "editing_id": editing_id,
             "sync_message": sync_message,
@@ -607,6 +708,12 @@ def admin(request: Request, edit: str | None = None):
     # URL que ya tenia (mismo repo_id) y la carpeta que quiera cambiar;
     # connect() ya sabe tratar eso como reconexion en vez de alta nueva.
     edit_repo = get_repo(config, edit) if edit else None
+    if edit_repo is not None and _repo_is_local(edit_repo):
+        # Los repos locales no tienen edicion propia (ver connect_local():
+        # reconectar la misma carpeta ya reactiva la entrada existente en
+        # vez de duplicarla) -- un ?edit= manual a uno de estos se
+        # ignora en vez de intentar precargar un repo_url que no existe.
+        edit_repo = None
     return render_hub(
         request,
         config,
@@ -658,23 +765,17 @@ def connect(request: Request, repo_url: str = Form(...), token: str = Form(""), 
                 error="La carpeta debe ser una ruta absoluta (ej. /home/tu-usuario/mis-wikis/repo).",
                 repo_url_prefill=repo_url, custom_path_prefill=custom_path,
             )
-        if dest == REPOS_DIR or REPOS_DIR in dest.parents or dest == SITES_DIR or SITES_DIR in dest.parents:
+        path_error = _validate_external_path(dest)
+        if path_error:
             return render_hub(
-                request, config, admin_open=True,
-                error="Elige una carpeta fuera de la carpeta interna de MARC.",
+                request, config, admin_open=True, error=path_error,
                 repo_url_prefill=repo_url, custom_path_prefill=custom_path,
             )
         # Colision: otro repo conectado ya usa esa misma carpeta como
-        # destino (custom o default) -- clonar ahi tambien lo dejaria con
-        # dos repos distintos peleando por el mismo working tree.
-        collision = next(
-            (
-                r for r in config["repos"]
-                if r["id"] != repo_id and Path(r.get("custom_path") or (REPOS_DIR / r["id"])) == dest
-            ),
-            None,
-        )
-        if collision is not None:
+        # destino (custom, local, o default) -- clonar ahi tambien lo
+        # dejaria con dos repos distintos peleando por el mismo working
+        # tree.
+        if _path_collision(config, repo_id, dest):
             return render_hub(
                 request, config, admin_open=True,
                 error="Esa carpeta ya la está usando otro repositorio conectado.",
@@ -725,6 +826,57 @@ def connect(request: Request, repo_url: str = Form(...), token: str = Form(""), 
     return RedirectResponse("/_admin", status_code=303)
 
 
+@app.post("/connect-local", response_class=HTMLResponse)
+def connect_local(request: Request, local_path: str = Form(...)):
+    """Conecta una carpeta del propio equipo como fuente de una wiki, sin
+    pedir ninguna URL de GitHub -- MARC la lee directo (nunca la clona,
+    nunca hace fetch/push/pull sobre ella), tenga o no su propio `.git`
+    interno (si lo tiene, solo se aprovecha para leer la fecha del ultimo
+    commit en el Hub, ver repo_last_update(); MARC jamas toca ese git).
+    El id sale de la ruta misma (_local_repo_id()), asi que reconectar la
+    misma carpeta reactiva la entrada que ya existia en vez de duplicarla
+    -- no hace falta una operacion de "editar" aparte para esta fuente."""
+    local_path = local_path.strip()
+    config = read_config()
+
+    path = Path(local_path).expanduser()
+    if not path.is_absolute():
+        return render_hub(
+            request, config, admin_open=True, local_tab=True,
+            error="La carpeta debe ser una ruta absoluta (ej. /home/tu-usuario/mi-wiki).",
+            local_path_prefill=local_path,
+        )
+    path = path.resolve()
+    if not path.is_dir():
+        return render_hub(
+            request, config, admin_open=True, local_tab=True,
+            error="Esa carpeta no existe.",
+            local_path_prefill=local_path,
+        )
+    path_error = _validate_external_path(path)
+    if path_error:
+        return render_hub(
+            request, config, admin_open=True, local_tab=True, error=path_error,
+            local_path_prefill=local_path,
+        )
+
+    repo_id = _local_repo_id(path)
+    if get_repo(config, repo_id) is None:
+        if _path_collision(config, repo_id, path):
+            return render_hub(
+                request, config, admin_open=True, local_tab=True,
+                error="Esa carpeta ya la está usando otro repositorio conectado.",
+                local_path_prefill=local_path,
+            )
+        config["repos"].append({"id": repo_id, "local_path": str(path)})
+    config["active_id"] = repo_id
+    write_config(config)
+
+    build_site(repo_id)
+    refresh_page_index(repo_id)
+    return RedirectResponse("/_admin", status_code=303)
+
+
 @app.post("/select/{repo_id}")
 def select(repo_id: str):
     config = read_config()
@@ -745,6 +897,16 @@ def resync(request: Request):
     active = get_active_repo(config)
     if active is None:
         return RedirectResponse("/_admin", status_code=303)
+    if "local_path" in active:
+        # Sin git de por medio que sincronizar -- "Resincronizar" en una
+        # carpeta local solo fuerza una relectura inmediata en vez de
+        # esperar al poll de /api/sync-check (ver ahi el mismo criterio
+        # de huella por mtime).
+        ok = build_site(active["id"])
+        message = "Actualizado desde la carpeta local." if ok else "No se pudo leer esa carpeta -- ¿sigue existiendo?"
+        if ok:
+            refresh_page_index(active["id"])
+        return render_hub(request, config, admin_open=True, sync_message=message, sync_ok=ok)
     token = keyring.get_password(KEYRING_SERVICE, token_key(active["id"]))
     ok, message = run_sync(active["repo_url"], token, repo_dir(active["id"]))
     if ok:
@@ -822,6 +984,19 @@ def sync_check():
     if active is None:
         return {"ok": True, "updated": False}
     dest = repo_dir(active["id"])
+    if "local_path" in active:
+        # Nada que hacer fetch/pull aqui -- el usuario edita esta carpeta
+        # con sus propias herramientas, fuera del control de MARC. La
+        # huella (ver _dir_fingerprint) cambia si algo real cambio desde
+        # la ultima vez que se construyo (refresh_page_index() la deja al
+        # dia cada vez), asi el poll solo reconstruye cuando hace falta.
+        if not dest.is_dir():
+            return {"ok": False, "updated": False}
+        updated = _dir_fingerprint(dest) != LOCAL_FINGERPRINT.get(active["id"])
+        if updated:
+            build_site(active["id"])
+            refresh_page_index(active["id"])
+        return {"ok": True, "updated": updated}
     before = _head_oid(dest)
     token = keyring.get_password(KEYRING_SERVICE, token_key(active["id"]))
     ok, _ = run_sync(active["repo_url"], token, dest)
@@ -855,8 +1030,12 @@ def disconnect(repo_id: str):
     if repo is None:
         return RedirectResponse("/_admin", status_code=303)
 
+    is_local = _repo_is_local(repo)
     is_custom = bool(repo.get("custom_path"))
-    dest = Path(repo["custom_path"]) if is_custom else REPOS_DIR / repo_id
+    if is_local:
+        dest = Path(repo["local_path"])
+    else:
+        dest = Path(repo["custom_path"]) if is_custom else REPOS_DIR / repo_id
 
     config["repos"] = [r for r in config["repos"] if r["id"] != repo_id]
     if config["active_id"] == repo_id:
@@ -872,14 +1051,16 @@ def disconnect(repo_id: str):
     # borra si vivia en la carpeta interna de MARC -- para que una futura
     # reconexion a esta URL parta de un `clone` limpio (un `pull` contra un
     # remoto distinto fallaria, historias no relacionadas). Si el usuario
-    # eligio la carpeta el mismo (`custom_path`), nunca se borra al
-    # desconectar: es su carpeta, el decide si borrarla o seguir usandola
-    # con otra herramienta (ver connect()).
-    if not is_custom:
+    # eligio la carpeta el mismo (`custom_path`) o conecto una carpeta
+    # local (`local_path`), nunca se borra al desconectar: es su carpeta,
+    # el decide si borrarla o seguir usandola con otra herramienta (ver
+    # connect()/connect_local()).
+    if not is_custom and not is_local:
         shutil.rmtree(dest, ignore_errors=True)
     shutil.rmtree(SITES_DIR / repo_id, ignore_errors=True)
 
     PAGE_INDEX.pop(repo_id, None)
+    LOCAL_FINGERPRINT.pop(repo_id, None)
     PAGE_INDEX_PATH.write_text(json.dumps(PAGE_INDEX, indent=2, ensure_ascii=False), encoding="utf-8")
 
     return RedirectResponse("/_admin", status_code=303)
