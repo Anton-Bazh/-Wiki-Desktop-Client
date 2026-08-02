@@ -34,7 +34,21 @@ matar, ej. de otra herramienta de trabajo) MARC simplemente no arrancaba.
 responde COMO MARC (`/_marc_ping`, ver webapp/server.py), y si no --sea
 porque nunca hubo uno guardado o porque el default esta ocupado por otra
 cosa-- busca uno libre de verdad (bind real, no solo intentar conectar)
-a partir de 8766 y lo recuerda en PORT_PATH para la proxima."""
+a partir de 8766 y lo recuerda en PORT_PATH para la proxima.
+
+Perfil de Firefox propio (Antonio, 1-ago-2026): el fallback a Firefox
+usaba `--no-remote --new-instance` pero sin `-P`/`-profile`, asi que
+seguia apuntando al perfil default -- el mismo que un Firefox normal ya
+abierto del usuario. Dos procesos sobre el mismo perfil chocan por su
+archivo de bloqueo y Firefox muestra "Firefox is already running, but is
+not responding" (bug real reportado por Antonio, reproducido: mientras
+tenia su Firefox normal abierto, MARC no pudo abrir su ventana).
+`_ensure_firefox_profile()` crea (una sola vez, marcador en
+FIREFOX_PROFILE_MARKER) un perfil separado llamado "marc" via
+`-CreateProfile` -- necesario en vez de pasar una ruta propia con
+`-profile <ruta>` porque con Firefox empaquetado como snap (el caso real
+en esta maquina) esa ruta arbitraria se ignora en silencio (confinamiento
+via AppArmor: solo escribe donde el propio `-CreateProfile` decide)."""
 
 import json
 import os
@@ -55,6 +69,8 @@ DEFAULT_PORT = 8766
 LOG_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "marc"
 LOG_PATH = LOG_DIR / "marc.log"
 PORT_PATH = LOG_DIR / "port"
+FIREFOX_PROFILE_NAME = "marc"
+FIREFOX_PROFILE_MARKER = LOG_DIR / "firefox-profile-created"
 
 APP_MODE_BROWSERS = (
     "google-chrome",
@@ -156,6 +172,30 @@ def _find_app_browser() -> str | None:
     return None
 
 
+def _ensure_firefox_profile(firefox: str) -> bool:
+    """Crea, una sola vez, un perfil de Firefox separado del perfil
+    default del usuario -- ver la nota del modulo. True si el perfil
+    quedo listo para usarse con `-P FIREFOX_PROFILE_NAME` (ya existia o
+    se creo ahora); False si `-CreateProfile` fallo, en cuyo caso se cae
+    al comportamiento viejo (arriesga el choque de perfil, pero no rompe
+    el lanzador)."""
+    if FIREFOX_PROFILE_MARKER.exists():
+        return True
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        result = subprocess.run(
+            [firefox, "-CreateProfile", FIREFOX_PROFILE_NAME],
+            timeout=15,
+            capture_output=True,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    if result.returncode != 0:
+        return False
+    FIREFOX_PROFILE_MARKER.write_text("1", encoding="utf-8")
+    return True
+
+
 def open_window(url: str) -> subprocess.Popen | None:
     """Abre `url` en una ventana propia y devuelve el proceso para poder
     esperar su cierre -- None si solo pudimos caer al `webbrowser.open()`
@@ -166,7 +206,11 @@ def open_window(url: str) -> subprocess.Popen | None:
         return subprocess.Popen([browser, f"--app={url}"])
     firefox = shutil.which("firefox")
     if firefox:
-        return subprocess.Popen([firefox, "--no-remote", "--new-instance", url])
+        args = [firefox, "--no-remote", "--new-instance"]
+        if _ensure_firefox_profile(firefox):
+            args += ["-P", FIREFOX_PROFILE_NAME]
+        args.append(url)
+        return subprocess.Popen(args)
     webbrowser.open(url)
     return None
 
