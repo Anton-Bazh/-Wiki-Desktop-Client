@@ -197,6 +197,16 @@ templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "tem
 templates.env.globals["app_version"] = APP_VERSION
 
 
+@app.get("/_marc_ping")
+def marc_ping():
+    """Marcador para que el lanzador (installer/*/launcher.py) distinga
+    'este puerto ya lo tiene MI backend' de 'este puerto lo tiene
+    cualquier otro proceso' antes de reusarlo o de darlo por libre --
+    sin esto, buscar puerto libre confundiria un servicio ajeno con una
+    instancia propia ya corriendo."""
+    return {"app": "marc", "version": APP_VERSION}
+
+
 def _slugify(text: str) -> str:
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
     text = re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()
