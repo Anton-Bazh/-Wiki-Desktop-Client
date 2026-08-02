@@ -13,19 +13,22 @@ navegador abre pero la pagina no carga, ese archivo es el primer lugar
 donde mirar.
 
 Ventana propia en vez de una pestana mas del navegador que ya tengas
-abierto (Antonio, 21-jul-2026): antes `webbrowser.open()` reusaba el
-navegador existente y no habia forma de saber cuando el usuario "cerraba
-MARC" -- por diseno el backend quedaba corriendo indefinidamente aunque
-se cerrara la pestana, ver doc del bug de sync (`/api/sync-check`).
-`open_window()` prueba primero Chrome/Chromium/Edge/Brave en `--app=`
-(ventana sin pestanas ni barra de direcciones, boton de cerrar normal);
-si el unico navegador instalado es Firefox (el caso real en esta
-maquina), cae a una instancia nueva y separada (`--no-remote
---new-instance`) en vez de agregar una pestana a un Firefox ya abierto
--- necesario para poder esperar a que ESA ventana se cierre sin
-confundirla con otras pestanas del usuario. Solo cuando este lanzador
-fue quien arranco el backend (no cuando ya estaba corriendo de una
-sesion/ventana previa) se espera el cierre de la ventana para matarlo.
+abierto (Antonio, 21-jul-2026): `open_window()` prueba primero
+Chrome/Chromium/Edge/Brave en `--app=` (ventana sin pestanas ni barra de
+direcciones); si el unico navegador instalado es Firefox (el caso real
+en esta maquina), cae a una instancia nueva y separada (`--no-remote
+--new-instance`) en vez de agregar una pestana a un Firefox ya abierto.
+
+Backend independiente de la ventana (correccion 1-ago-2026: el diseno
+anterior mataba el backend cuando esa ventana se cerraba -- via
+`window.wait()` + `backend.terminate()` en `main()`. Antonio aclaro que
+eso rompe el punto de ser una app web local: el proceso debe seguir
+vivo pase lo que pase con ventanas/pestanas, igual que cualquier server
+que corre en segundo plano, y apagarse solo con el boton explicito
+"Salir" (`POST /shutdown` en `webapp/server.py`). `main()` ya no espera
+el cierre de la ventana ni toca el backend -- lo deja corriendo
+`start_new_session=True` (independiente del launcher) hasta que el
+propio usuario lo apague desde la UI.
 
 Puerto libre automatico (Antonio, 29-jul-2026): antes el puerto 8766
 era fijo -- si otro proceso ya lo tenia tomado (uno que Antonio no podia
@@ -218,9 +221,8 @@ def open_window(url: str) -> subprocess.Popen | None:
 def main() -> None:
     port = resolve_port()
     url = f"http://{HOST}:{port}/"
-    backend = None
     if not is_running(port):
-        backend = start_backend(port)
+        start_backend(port)
         for _ in range(60):
             if is_running(port):
                 break
@@ -228,14 +230,7 @@ def main() -> None:
         else:
             sys.stderr.write(f"MARC: el backend no respondio a tiempo. Revisa {LOG_PATH}\n")
 
-    window = open_window(url)
-    if window is not None and backend is not None:
-        window.wait()
-        backend.terminate()
-        try:
-            backend.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            backend.kill()
+    open_window(url)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,12 @@ cae a Firefox en instancia separada, y en ultimo caso a webbrowser.open()
 de siempre. NOTA: sin verificar en Windows real todavia (solo Wine, que
 no trae estos navegadores) -- ver "Pendiente" del proyecto.
 
+Backend independiente de la ventana (correccion 1-ago-2026, mismo
+cambio y mismo porque que installer/linux/launcher.py): `main()` ya no
+espera el cierre de la ventana para matar el backend -- el proceso
+sigue vivo hasta que el usuario lo apague con el boton "Salir" de la UI
+(`POST /shutdown`).
+
 Puerto libre automatico (Antonio, 29-jul-2026, mismo cambio y mismo
 porque que installer/linux/launcher.py): el 8766 fijo se reemplaza por
 `resolve_port()`, que reusa el puerto de la corrida anterior si todavia
@@ -205,9 +211,8 @@ def open_window(url: str) -> subprocess.Popen | None:
 def main() -> None:
     port = resolve_port()
     url = f"http://{HOST}:{port}/"
-    backend = None
     if not is_running(port):
-        backend = start_backend(port)
+        start_backend(port)
         for _ in range(60):
             if is_running(port):
                 break
@@ -215,14 +220,7 @@ def main() -> None:
         else:
             sys.stderr.write(f"MARC: el backend no respondio a tiempo. Revisa {LOG_PATH}\n")
 
-    window = open_window(url)
-    if window is not None and backend is not None:
-        window.wait()
-        backend.terminate()
-        try:
-            backend.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            backend.kill()
+    open_window(url)
 
 
 if __name__ == "__main__":
